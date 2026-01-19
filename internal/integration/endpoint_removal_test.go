@@ -67,7 +67,7 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 	}
 
 	store := runtime.NewStore(snap1)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 

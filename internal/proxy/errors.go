@@ -22,6 +22,9 @@ type ProxyErrorBody struct {
 }
 
 func WriteProxyError(w http.ResponseWriter, requestID string, status int, category string, message string) {
+	if recorder, ok := w.(errorCategoryWriter); ok {
+		recorder.SetErrorCategory(category)
+	}
 	w.Header().Set(RequestIDHeader, requestID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

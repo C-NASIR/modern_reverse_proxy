@@ -16,6 +16,10 @@ devdocs/
 # Go workspace file
 go.work
 
+# Go cache
+.gocache/
+.gomodcache/
+
 # IDE/editor
 .idea/
 .vscode/

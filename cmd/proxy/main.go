@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"modern_reverse_proxy/internal/config"
+	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/proxy"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
@@ -24,6 +25,9 @@ func main() {
 		log.Fatalf("parse config: %v", err)
 	}
 	reg := registry.NewRegistry(0, 0)
+	metrics := obs.NewMetrics(obs.MetricsConfig{})
+	obs.SetDefaultMetrics(metrics)
+
 	snap, err := runtime.BuildSnapshot(cfg, reg)
 	if err != nil {
 		log.Fatalf("build snapshot: %v", err)
@@ -33,8 +37,13 @@ func main() {
 	handler := &proxy.Handler{
 		Store:    store,
 		Registry: reg,
-		Engine:   proxy.NewEngine(reg),
+		Engine:   proxy.NewEngine(reg, metrics),
+		Metrics:  metrics,
 	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	mux.Handle("/", handler)
 
 	listenAddr := cfg.ListenAddr
 	if listenAddr == "" {
@@ -42,5 +51,5 @@ func main() {
 	}
 
 	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, handler))
+	log.Fatal(http.ListenAndServe(listenAddr, mux))
 }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -20,10 +21,11 @@ type Engine struct {
 	mu         sync.Mutex
 	transports map[string]*http.Transport
 	registry   *registry.Registry
+	metrics    *obs.Metrics
 }
 
-func NewEngine(reg *registry.Registry) *Engine {
-	return &Engine{transports: make(map[string]*http.Transport), registry: reg}
+func NewEngine(reg *registry.Registry, metrics *obs.Metrics) *Engine {
+	return &Engine{transports: make(map[string]*http.Transport), registry: reg, metrics: metrics}
 }
 
 func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, poolKey pool.PoolKey, upstreamAddr string, policy policy.Policy, requestID string) {
@@ -59,8 +61,15 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, poolKey pool.Po
 	outbound.Header = r.Header.Clone()
 	outbound.Host = upstreamAddr
 	setForwardedHeaders(outbound, r)
+	obs.InjectTraceHeaders(outbound, r.Context())
 
+	obs.MarkPhase(r.Context(), "upstream_roundtrip_start")
+	roundtripStart := time.Now()
 	resp, err := transport.RoundTrip(outbound)
+	obs.MarkPhase(r.Context(), "upstream_roundtrip_end")
+	if e.metrics != nil {
+		e.metrics.ObserveUpstreamRoundTrip(string(poolKey), time.Since(roundtripStart))
+	}
 	if err != nil {
 		if isRequestTimeout(r.Context()) {
 			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "request_timeout", "request timed out")
@@ -70,15 +79,18 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, poolKey pool.Po
 			return
 		}
 		if isTimeoutError(err) {
+			e.recordUpstreamError(poolKey, "timeout")
 			e.passiveFailure(poolKey, upstreamAddr)
 			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "upstream_timeout", "upstream timeout")
 			return
 		}
 		if isDialError(err) {
+			e.recordUpstreamError(poolKey, "connect_failed")
 			e.passiveFailure(poolKey, upstreamAddr)
 			WriteProxyError(w, requestID, http.StatusBadGateway, "upstream_connect_failed", "upstream connect failed")
 			return
 		}
+		e.recordUpstreamError(poolKey, "other")
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
 		return
 	}
@@ -185,4 +197,11 @@ func (e *Engine) passiveSuccess(poolKey pool.PoolKey, addr string) {
 		return
 	}
 	e.registry.PassiveSuccess(poolKey, addr)
+}
+
+func (e *Engine) recordUpstreamError(poolKey pool.PoolKey, category string) {
+	if e.metrics == nil {
+		return
+	}
+	e.metrics.RecordUpstreamError(string(poolKey), category)
 }

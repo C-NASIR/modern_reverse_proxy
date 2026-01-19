@@ -1,0 +1,204 @@
+package obs
+
+import (
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+type MetricsConfig struct {
+	RouteTopK         int
+	PoolTopK          int
+	RecomputeInterval time.Duration
+}
+
+type Metrics struct {
+	registry          *prometheus.Registry
+	topk              *TopK
+	requests          *prometheus.CounterVec
+	upstreamErrors    *prometheus.CounterVec
+	proxyErrors       *prometheus.CounterVec
+	configApply       *prometheus.CounterVec
+	requestDuration   *prometheus.HistogramVec
+	upstreamRoundTrip *prometheus.HistogramVec
+	snapshotInfo      *prometheus.GaugeVec
+	mu                sync.Mutex
+	lastVersion       string
+	lastSource        string
+}
+
+var (
+	defaultMetricsMu sync.RWMutex
+	defaultMetrics   *Metrics
+)
+
+func SetDefaultMetrics(metrics *Metrics) {
+	defaultMetricsMu.Lock()
+	defaultMetrics = metrics
+	defaultMetricsMu.Unlock()
+}
+
+func DefaultMetrics() *Metrics {
+	defaultMetricsMu.RLock()
+	defer defaultMetricsMu.RUnlock()
+	return defaultMetrics
+}
+
+func NewMetrics(cfg MetricsConfig) *Metrics {
+	registry := prometheus.NewRegistry()
+	topk := NewTopK(cfg.RouteTopK, cfg.PoolTopK, cfg.RecomputeInterval)
+
+	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_requests_total",
+		Help: "Total proxy requests",
+	}, []string{"route", "status_class"})
+
+	upstreamErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_upstream_errors_total",
+		Help: "Total upstream errors",
+	}, []string{"pool", "category"})
+
+	proxyErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_proxy_errors_total",
+		Help: "Total proxy-generated errors",
+	}, []string{"route", "category"})
+
+	configApply := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_config_apply_total",
+		Help: "Total config apply attempts",
+	}, []string{"result"})
+
+	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "proxy_request_duration_seconds",
+		Help:    "Proxy request duration",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"route"})
+
+	upstreamRoundTrip := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "proxy_upstream_roundtrip_seconds",
+		Help:    "Upstream roundtrip duration",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"pool"})
+
+	snapshotInfoGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "proxy_active_snapshot_info",
+		Help: "Active snapshot metadata",
+	}, []string{"version", "source"})
+
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, configApply, requestDuration, upstreamRoundTrip, snapshotInfoGauge)
+
+	return &Metrics{
+		registry:          registry,
+		topk:              topk,
+		requests:          requests,
+		upstreamErrors:    upstreamErrors,
+		proxyErrors:       proxyErrors,
+		configApply:       configApply,
+		requestDuration:   requestDuration,
+		upstreamRoundTrip: upstreamRoundTrip,
+		snapshotInfo:      snapshotInfoGauge,
+	}
+}
+
+func (m *Metrics) Handler() http.Handler {
+	if m == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+	}
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+}
+
+func (m *Metrics) ObserveRequest(routeID string, poolKey string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit(routeID, poolKey)
+	canonRoute := m.topk.CanonRoute(routeID)
+	statusClass := statusClass(status)
+	m.requests.WithLabelValues(canonRoute, statusClass).Inc()
+	m.requestDuration.WithLabelValues(canonRoute).Observe(duration.Seconds())
+}
+
+func (m *Metrics) ObserveUpstreamRoundTrip(poolKey string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	m.upstreamRoundTrip.WithLabelValues(canonPool).Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordUpstreamError(poolKey string, category string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	m.upstreamErrors.WithLabelValues(canonPool, category).Inc()
+}
+
+func (m *Metrics) RecordProxyError(routeID string, category string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	canonRoute := m.topk.CanonRoute(routeID)
+	m.proxyErrors.WithLabelValues(canonRoute, category).Inc()
+}
+
+func (m *Metrics) RecordConfigApply(result string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.configApply.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) SetSnapshotInfo(version string, source string) {
+	if m == nil || version == "" {
+		return
+	}
+	if source == "" {
+		source = "unknown"
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastVersion != "" {
+		m.snapshotInfo.WithLabelValues(m.lastVersion, m.lastSource).Set(0)
+	}
+	m.snapshotInfo.WithLabelValues(version, source).Set(1)
+	m.lastVersion = version
+	m.lastSource = source
+}
+
+func statusClass(status int) string {
+	if status <= 0 {
+		return "unknown"
+	}
+	class := status / 100
+	return fmt.Sprintf("%dxx", class)
+}

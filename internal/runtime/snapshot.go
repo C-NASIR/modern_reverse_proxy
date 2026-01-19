@@ -9,6 +9,7 @@ import (
 
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/health"
+	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -16,8 +17,11 @@ import (
 )
 
 type Snapshot struct {
-	Router *router.Router
-	Pools  map[string]pool.PoolKey
+	Router    *router.Router
+	Pools     map[string]pool.PoolKey
+	Version   string
+	CreatedAt time.Time
+	Source    string
 }
 
 type Store struct {
@@ -62,6 +66,19 @@ const (
 )
 
 func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error) {
+	success := false
+	defer func() {
+		metrics := obs.DefaultMetrics()
+		if metrics == nil {
+			return
+		}
+		if success {
+			metrics.RecordConfigApply("success")
+			return
+		}
+		metrics.RecordConfigApply("rejected")
+	}()
+
 	if cfg == nil {
 		return nil, errors.New("config is nil")
 	}
@@ -140,10 +157,15 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 		return nil, errors.New("router build failed")
 	}
 
-	return &Snapshot{
-		Router: compiled,
-		Pools:  pools,
-	}, nil
+	snapshot := &Snapshot{
+		Router:    compiled,
+		Pools:     pools,
+		Version:   fmt.Sprintf("v-%d", time.Now().UnixNano()),
+		CreatedAt: time.Now().UTC(),
+		Source:    "file",
+	}
+	success = true
+	return snapshot, nil
 }
 
 func durationOrDefault(ms int, fallback time.Duration) time.Duration {
