@@ -12,6 +12,7 @@ import (
 	"modern_reverse_proxy/internal/cache"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
+	"modern_reverse_proxy/internal/plugin"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -25,6 +26,7 @@ type Handler struct {
 	RetryRegistry   *registry.RetryRegistry
 	BreakerRegistry *breaker.Registry
 	OutlierRegistry *outlier.Registry
+	PluginRegistry  *plugin.Registry
 	Engine          *Engine
 	Metrics         *obs.Metrics
 	Cache           *cache.Cache
@@ -70,6 +72,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	overloadRejected := false
 	autoDrainActive := false
 	trafficPlan := (*traffic.Plan)(nil)
+	pluginFilters := []string{}
+	pluginTracking := &pluginTracking{}
 	tlsEnabled := r.TLS != nil
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
@@ -106,6 +110,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RouteID:              routeID,
 			PoolKey:              poolKey,
 			UpstreamAddr:         upstreamAddr,
+			PluginFilters:        pluginFilters,
+			PluginBypassed:       pluginTracking.bypassed,
+			PluginBypassReason:   pluginTracking.bypassReason,
+			PluginFailureMode:    pluginTracking.failureMode,
+			PluginShortCircuit:   pluginTracking.shortCircuit,
+			PluginMutationDenied: pluginTracking.mutationDenied,
 			Status:               recorder.Status(),
 			Duration:             duration,
 			BytesIn:              bytesIn,
@@ -170,6 +180,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeID = route.ID
+	if route.Policy.Plugins.Enabled && len(route.Policy.Plugins.Filters) > 0 {
+		pluginFilters = make([]string, 0, len(route.Policy.Plugins.Filters))
+		for _, filter := range route.Policy.Plugins.Filters {
+			pluginFilters = append(pluginFilters, filter.Name)
+		}
+	}
 	mtlsRouteRequired = route.Policy.RequireMTLS
 	if route.Policy.RequireMTLS {
 		if snap.TLSStore == nil {
@@ -238,27 +254,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	stablePoolKey := selectedPoolKey
 
-	cachePolicy := route.Policy.Cache
-	cacheKey := ""
-	cacheEligible := isCacheEligible(r, cachePolicy, h.Cache)
-	if cacheEligible {
-		cacheKey = cache.BuildKey(r, cachePolicy)
-		if h.Cache != nil && h.Cache.Store != nil {
-			if entry, ok := h.Cache.Store.Get(cacheKey); ok {
-				cacheStatus = "hit"
-				cacheMetricStatus = "hit"
-				writeCachedResponse(recorder, entry, requestID, r.Method)
-				if h.Metrics != nil {
-					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
-				}
-				return
-			}
-		}
-	}
-
 	poolConfig, ok := snap.PoolConfigs[selectedPoolName]
 	if !ok {
 		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool config missing")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), route.Policy.RequestTimeout)
+	defer cancel()
+
+	r = r.WithContext(ctx)
+	if h.applyRequestPlugins(recorder, r, route, requestID, pluginTracking) {
 		return
 	}
 
@@ -281,10 +287,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), route.Policy.RequestTimeout)
-	defer cancel()
-
-	r = r.WithContext(ctx)
+	cachePolicy := route.Policy.Cache
+	cacheKey := ""
+	cacheEligible := isCacheEligible(r, cachePolicy, h.Cache)
+	if cacheEligible {
+		cacheKey = cache.BuildKey(r, cachePolicy)
+		if h.Cache != nil && h.Cache.Store != nil {
+			if entry, ok := h.Cache.Store.Get(cacheKey); ok {
+				cacheStatus = "hit"
+				cacheMetricStatus = "hit"
+				writeCachedResponse(recorder, entry, requestID, r.Method)
+				if h.Metrics != nil {
+					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+				}
+				return
+			}
+		}
+	}
 	obs.MarkPhase(r.Context(), "upstream_pick")
 	picker := func() (pool.PickResult, bool) {
 		return h.Registry.Pick(poolKeyValue, func(addr string, now time.Time) bool {
@@ -344,6 +363,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		outlierIgnored = forwardResult.OutlierIgnored
 		endpointEjected = forwardResult.EndpointEjected
 
+		if h.applyResponsePlugins(recorder, r, retryResult.Response, route, requestID, pluginTracking) {
+			return
+		}
+
 		cacheable, contentLength := isCacheableResponse(retryResult.Response, cachePolicy)
 		if !cacheable {
 			cacheStatus = "not_cacheable"
@@ -391,7 +414,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	forwardResult := h.Engine.ForwardWithRetry(recorder, r, poolKeyValue, stablePoolKey, picker, route.Policy, route.ID, poolConfig.Breaker, requestID)
+	retryResult, forwardResult := h.Engine.roundTripWithRetry(r, poolKeyValue, stablePoolKey, picker, route.Policy, route.ID, poolConfig.Breaker)
+	if retryResult.Response == nil {
+		if writeProxyErrorForResult(recorder, r, requestID, retryResult) {
+			return
+		}
+		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
+		return
+	}
 	if forwardResult.UpstreamAddr != "" {
 		upstreamAddr = forwardResult.UpstreamAddr
 	}
@@ -400,6 +430,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retryBudgetExhausted = forwardResult.RetryBudgetExhausted
 	outlierIgnored = forwardResult.OutlierIgnored
 	endpointEjected = forwardResult.EndpointEjected
+	if h.applyResponsePlugins(recorder, r, retryResult.Response, route, requestID, pluginTracking) {
+		return
+	}
+	WriteUpstreamResponse(recorder, retryResult.Response, requestID)
 }
 
 func isCacheEligible(r *http.Request, cachePolicy policy.CachePolicy, cacheLayer *cache.Cache) bool {

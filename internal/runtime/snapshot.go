@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"modern_reverse_proxy/internal/health"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
+	"modern_reverse_proxy/internal/plugin"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -104,6 +106,12 @@ const (
 	defaultCacheCoalesceTimeout          = 5 * time.Second
 	defaultTLSAddr                       = "127.0.0.1:8443"
 	defaultTrafficStableWeight           = 100
+	defaultPluginRequestTimeout          = 50 * time.Millisecond
+	defaultPluginResponseTimeout         = 50 * time.Millisecond
+	defaultPluginBreakerOpenDuration     = 2 * time.Second
+	maxPluginFilters                     = 200
+	defaultPluginBreakerConsecutiveFails = 5
+	defaultPluginBreakerHalfOpenProbes   = 3
 )
 
 var (
@@ -186,6 +194,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 	}
 
 	seenIDs := make(map[string]struct{}, len(cfg.Routes))
+	filterNames := make(map[string]struct{})
 	routes := make([]policy.Route, 0, len(cfg.Routes))
 	requiresMTLS := false
 	for _, route := range cfg.Routes {
@@ -251,6 +260,12 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 			RequireMTLS:  route.Policy.RequireMTLS,
 			MTLSClientCA: route.Policy.MTLSClientCA,
 		}
+
+		pluginPolicy, err := pluginPolicyFromConfig(route.ID, route.Policy.Plugins, filterNames)
+		if err != nil {
+			return nil, err
+		}
+		policyRuntime.Plugins = pluginPolicy
 
 		cachePolicy, err := cachePolicyFromConfig(route.ID, route.Policy.Cache)
 		if err != nil {
@@ -447,6 +462,84 @@ func cachePolicyFromConfig(routeID string, cacheCfg config.CacheConfig) (policy.
 		CoalesceTimeout:     coalesceTimeout,
 		OnlyIfContentLength: onlyIfContentLength,
 	}, nil
+}
+
+func pluginPolicyFromConfig(routeID string, pluginCfg config.PluginConfig, filterNames map[string]struct{}) (plugin.Policy, error) {
+	filters := make([]plugin.Filter, 0, len(pluginCfg.Filters))
+	if pluginCfg.Enabled && len(pluginCfg.Filters) == 0 {
+		return plugin.Policy{}, fmt.Errorf("route %q plugins enabled but no filters", routeID)
+	}
+
+	for _, filter := range pluginCfg.Filters {
+		name := strings.TrimSpace(filter.Name)
+		if name == "" {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter name required", routeID)
+		}
+		addr := strings.TrimSpace(filter.Addr)
+		if addr == "" {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter %q addr required", routeID, name)
+		}
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter %q addr must be host:port", routeID, name)
+		}
+		if filterNames != nil {
+			filterNames[name] = struct{}{}
+			if len(filterNames) > maxPluginFilters {
+				return plugin.Policy{}, fmt.Errorf("plugin filter count exceeds %d", maxPluginFilters)
+			}
+		}
+
+		requestTimeout := durationOrDefault(filter.RequestTimeoutMS, defaultPluginRequestTimeout)
+		if requestTimeout <= 0 {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter %q request_timeout_ms must be > 0", routeID, name)
+		}
+		responseTimeout := durationOrDefault(filter.ResponseTimeoutMS, defaultPluginResponseTimeout)
+		if responseTimeout <= 0 {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter %q response_timeout_ms must be > 0", routeID, name)
+		}
+
+		failureMode, err := parseFailureMode(filter.FailureMode)
+		if err != nil {
+			return plugin.Policy{}, fmt.Errorf("route %q plugin filter %q %v", routeID, name, err)
+		}
+
+		breakerEnabled := boolOrDefault(filter.Breaker.Enabled, true)
+		breaker := plugin.BreakerConfig{
+			Enabled:             breakerEnabled,
+			ConsecutiveFailures: intOrDefault(filter.Breaker.ConsecutiveFailures, defaultPluginBreakerConsecutiveFails),
+			OpenDuration:        durationOrDefault(filter.Breaker.OpenMS, defaultPluginBreakerOpenDuration),
+			HalfOpenProbes:      intOrDefault(filter.Breaker.HalfOpenProbes, defaultPluginBreakerHalfOpenProbes),
+		}
+
+		filters = append(filters, plugin.Filter{
+			Name:            name,
+			Addr:            addr,
+			RequestTimeout:  requestTimeout,
+			ResponseTimeout: responseTimeout,
+			FailureMode:     failureMode,
+			Breaker:         breaker,
+		})
+	}
+
+	return plugin.Policy{
+		Enabled: pluginCfg.Enabled,
+		Filters: filters,
+	}, nil
+}
+
+func parseFailureMode(mode string) (plugin.FailureMode, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(mode))
+	if trimmed == "" {
+		return plugin.FailureModeFailOpen, nil
+	}
+	switch trimmed {
+	case string(plugin.FailureModeFailOpen):
+		return plugin.FailureModeFailOpen, nil
+	case string(plugin.FailureModeFailClose):
+		return plugin.FailureModeFailClose, nil
+	default:
+		return "", fmt.Errorf("failure_mode must be fail_open or fail_closed")
+	}
 }
 
 func trafficConfigFromRoute(routeID string, cfg config.TrafficConfig) (traffic.Config, string, string, error) {

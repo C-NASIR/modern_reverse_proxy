@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package pluginpb;
+
+option go_package = "modern_reverse_proxy/internal/plugin/proto;pluginpb";
+
+service FilterService {
+  rpc ApplyRequest(ApplyRequestRequest) returns (ApplyRequestResponse);
+  rpc ApplyResponse(ApplyResponseRequest) returns (ApplyResponseResponse);
+}
+
+message ApplyRequestRequest {
+  string request_id = 1;
+  string route_id = 2;
+  string method = 3;
+  string host = 4;
+  string path = 5;
+  map<string, string> headers = 6;
+  bytes body_preview = 7;
+}
+
+message ApplyRequestResponse {
+  enum Action {
+    CONTINUE = 0;
+    RESPOND = 1;
+  }
+  Action action = 1;
+  map<string, string> mutated_headers = 2;
+  int32 response_status = 3;
+  map<string, string> response_headers = 4;
+  bytes response_body = 5;
+}
+
+message ApplyResponseRequest {
+  string request_id = 1;
+  string route_id = 2;
+  int32 upstream_status = 3;
+  map<string, string> upstream_headers = 4;
+}
+
+message ApplyResponseResponse {
+  map<string, string> mutated_headers = 1;
+}

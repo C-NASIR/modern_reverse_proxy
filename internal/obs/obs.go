@@ -10,6 +10,12 @@ type RequestContext struct {
 	RouteID              string
 	PoolKey              string
 	UpstreamAddr         string
+	PluginFilters        []string
+	PluginBypassed       bool
+	PluginBypassReason   string
+	PluginFailureMode    string
+	PluginShortCircuit   bool
+	PluginMutationDenied bool
 	Status               int
 	Duration             time.Duration
 	BytesIn              int64

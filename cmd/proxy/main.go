@@ -11,6 +11,7 @@ import (
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
+	"modern_reverse_proxy/internal/plugin"
 	"modern_reverse_proxy/internal/proxy"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
@@ -37,6 +38,7 @@ func main() {
 	breakerReg := breaker.NewRegistry(0, 0)
 	outlierReg := outlier.NewRegistry(0, 0, metrics.RecordOutlierEjection)
 	trafficReg := traffic.NewRegistry(0, 0)
+	pluginReg := plugin.NewRegistry(0)
 
 	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
@@ -53,6 +55,7 @@ func main() {
 		RetryRegistry:   retryReg,
 		BreakerRegistry: breakerReg,
 		OutlierRegistry: outlierReg,
+		PluginRegistry:  pluginReg,
 		Engine:          proxy.NewEngine(reg, retryReg, metrics, breakerReg, outlierReg),
 		Metrics:         metrics,
 		Cache:           cacheLayer,

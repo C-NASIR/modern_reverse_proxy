@@ -35,6 +35,10 @@ type Metrics struct {
 	variantRequests        *prometheus.CounterVec
 	variantErrors          *prometheus.CounterVec
 	overloadRejects        *prometheus.CounterVec
+	pluginCalls            *prometheus.CounterVec
+	pluginBypass           *prometheus.CounterVec
+	pluginShortCircuit     *prometheus.CounterVec
+	pluginFailClosed       *prometheus.CounterVec
 	requestDuration        *prometheus.HistogramVec
 	upstreamRoundTrip      *prometheus.HistogramVec
 	snapshotInfo           *prometheus.GaugeVec
@@ -145,6 +149,26 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Total overload rejections",
 	}, []string{"route"})
 
+	pluginCalls := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_plugin_calls_total",
+		Help: "Total plugin calls",
+	}, []string{"filter", "phase", "result"})
+
+	pluginBypass := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_plugin_bypass_total",
+		Help: "Total plugin bypasses",
+	}, []string{"filter", "reason"})
+
+	pluginShortCircuit := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_plugin_shortcircuit_total",
+		Help: "Total plugin short-circuits",
+	}, []string{"filter"})
+
+	pluginFailClosed := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_plugin_failclosed_total",
+		Help: "Total plugin fail-closed responses",
+	}, []string{"filter"})
+
 	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_request_duration_seconds",
 		Help:    "Proxy request duration",
@@ -167,7 +191,7 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Active snapshot metadata",
 	}, []string{"version", "source"})
 
-	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, variantRequests, variantErrors, overloadRejects, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, variantRequests, variantErrors, overloadRejects, pluginCalls, pluginBypass, pluginShortCircuit, pluginFailClosed, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
 
 	return &Metrics{
 		registry:               registry,
@@ -188,6 +212,10 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		variantRequests:        variantRequests,
 		variantErrors:          variantErrors,
 		overloadRejects:        overloadRejects,
+		pluginCalls:            pluginCalls,
+		pluginBypass:           pluginBypass,
+		pluginShortCircuit:     pluginShortCircuit,
+		pluginFailClosed:       pluginFailClosed,
 		requestDuration:        requestDuration,
 		upstreamRoundTrip:      upstreamRoundTrip,
 		snapshotInfo:           snapshotInfoGauge,
@@ -436,6 +464,71 @@ func (m *Metrics) RecordOverloadReject(routeID string) {
 	m.topk.ObserveHit(routeID, "")
 	canonRoute := m.topk.CanonRoute(routeID)
 	m.overloadRejects.WithLabelValues(canonRoute).Inc()
+}
+
+func (m *Metrics) RecordPluginCall(filter string, phase string, result string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if filter == "" {
+		filter = "unknown"
+	}
+	if phase == "" {
+		phase = "unknown"
+	}
+	if result == "" {
+		result = "unknown"
+	}
+	m.pluginCalls.WithLabelValues(filter, phase, result).Inc()
+}
+
+func (m *Metrics) RecordPluginBypass(filter string, reason string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if filter == "" {
+		filter = "unknown"
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.pluginBypass.WithLabelValues(filter, reason).Inc()
+}
+
+func (m *Metrics) RecordPluginShortCircuit(filter string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if filter == "" {
+		filter = "unknown"
+	}
+	m.pluginShortCircuit.WithLabelValues(filter).Inc()
+}
+
+func (m *Metrics) RecordPluginFailClosed(filter string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if filter == "" {
+		filter = "unknown"
+	}
+	m.pluginFailClosed.WithLabelValues(filter).Inc()
 }
 
 func (m *Metrics) SetBreakerOpen(poolKey string, open bool) {

@@ -38,6 +38,7 @@ type RoutePolicy struct {
 	MTLSClientCA                    string               `json:"mtls_client_ca"`
 	Cache                           CacheConfig          `json:"cache"`
 	Traffic                         TrafficConfig        `json:"traffic"`
+	Plugins                         PluginConfig         `json:"plugins"`
 }
 
 type TLSConfig struct {
@@ -100,6 +101,27 @@ type TrafficConfig struct {
 	Cohort       CohortConfig    `json:"cohort"`
 	Overload     OverloadConfig  `json:"overload"`
 	AutoDrain    AutoDrainConfig `json:"autodrain"`
+}
+
+type PluginConfig struct {
+	Enabled bool           `json:"enabled"`
+	Filters []PluginFilter `json:"filters"`
+}
+
+type PluginFilter struct {
+	Name              string              `json:"name"`
+	Addr              string              `json:"addr"`
+	RequestTimeoutMS  int                 `json:"request_timeout_ms"`
+	ResponseTimeoutMS int                 `json:"response_timeout_ms"`
+	FailureMode       string              `json:"failure_mode"`
+	Breaker           PluginBreakerConfig `json:"breaker"`
+}
+
+type PluginBreakerConfig struct {
+	Enabled             *bool `json:"enabled"`
+	ConsecutiveFailures int   `json:"consecutive_failures"`
+	OpenMS              int   `json:"open_ms"`
+	HalfOpenProbes      int   `json:"half_open_probes"`
 }
 
 type CohortConfig struct {

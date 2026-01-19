@@ -3,6 +3,7 @@ package policy
 import (
 	"time"
 
+	"modern_reverse_proxy/internal/plugin"
 	"modern_reverse_proxy/internal/traffic"
 )
 
@@ -16,6 +17,7 @@ type Policy struct {
 	RequireMTLS                   bool
 	MTLSClientCA                  string
 	Cache                         CachePolicy
+	Plugins                       plugin.Policy
 }
 
 type RetryPolicy struct {
