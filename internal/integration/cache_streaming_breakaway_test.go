@@ -19,6 +19,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestCacheStreamingBreakaway(t *testing.T) {
@@ -139,6 +140,7 @@ func startCacheProxy(t *testing.T, upstreamAddr string, options cacheConfigOptio
 	t.Helper()
 
 	reg := registry.NewRegistry(50*time.Millisecond, 200*time.Millisecond)
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	metrics := obs.NewMetrics(obs.MetricsConfig{})
 	obs.SetDefaultMetrics(metrics)
@@ -172,7 +174,7 @@ func startCacheProxy(t *testing.T, upstreamAddr string, options cacheConfigOptio
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		reg.Close()
 		obs.SetDefaultMetrics(nil)

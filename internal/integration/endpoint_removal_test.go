@@ -14,6 +14,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
@@ -46,6 +47,7 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 
 	reg := registry.NewRegistry(50*time.Millisecond, 200*time.Millisecond)
 	defer reg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	cfg1 := &config.Config{
 		Routes: []config.Route{
@@ -61,7 +63,7 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 		},
 	}
 
-	snap1, err := runtime.BuildSnapshot(cfg1, reg, nil, nil)
+	snap1, err := runtime.BuildSnapshot(cfg1, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -88,7 +90,7 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 		},
 	}
 
-	snap2, err := runtime.BuildSnapshot(cfg2, reg, nil, nil)
+	snap2, err := runtime.BuildSnapshot(cfg2, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

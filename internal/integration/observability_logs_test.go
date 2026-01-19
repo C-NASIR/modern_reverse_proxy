@@ -17,6 +17,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestAccessLogContainsRequiredFields(t *testing.T) {
@@ -29,6 +30,7 @@ func TestAccessLogContainsRequiredFields(t *testing.T) {
 
 	reg := registry.NewRegistry(50*time.Millisecond, 200*time.Millisecond)
 	defer reg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	metrics := obs.NewMetrics(obs.MetricsConfig{})
 	obs.SetDefaultMetrics(metrics)
@@ -48,7 +50,7 @@ func TestAccessLogContainsRequiredFields(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

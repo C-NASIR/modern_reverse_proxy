@@ -26,6 +26,11 @@ type AccessLogEntry struct {
 	RetryBudgetExhausted bool   `json:"retry_budget_exhausted"`
 	CacheStatus          string `json:"cache_status"`
 	SnapshotVersion      string `json:"snapshot_version"`
+	TrafficVariant       string `json:"traffic_variant"`
+	CohortMode           string `json:"cohort_mode"`
+	CohortKeyPresent     bool   `json:"cohort_key_present"`
+	OverloadRejected     bool   `json:"overload_rejected"`
+	AutoDrainActive      bool   `json:"autodrain_active"`
 	UserAgent            string `json:"user_agent,omitempty"`
 	RemoteAddr           string `json:"remote_addr,omitempty"`
 	BreakerState         string `json:"breaker_state,omitempty"`
@@ -57,6 +62,11 @@ func LogAccess(ctx RequestContext) {
 		RetryBudgetExhausted: ctx.RetryBudgetExhausted,
 		CacheStatus:          defaultString(ctx.CacheStatus, "bypass"),
 		SnapshotVersion:      defaultString(ctx.SnapshotVersion, "none"),
+		TrafficVariant:       defaultString(ctx.TrafficVariant, "stable"),
+		CohortMode:           defaultString(ctx.CohortMode, "random"),
+		CohortKeyPresent:     ctx.CohortKeyPresent,
+		OverloadRejected:     ctx.OverloadRejected,
+		AutoDrainActive:      ctx.AutoDrainActive,
 		UserAgent:            ctx.UserAgent,
 		RemoteAddr:           ctx.RemoteAddr,
 		BreakerState:         defaultString(ctx.BreakerState, "none"),

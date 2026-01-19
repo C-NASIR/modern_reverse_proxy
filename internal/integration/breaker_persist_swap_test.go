@@ -14,6 +14,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestBreakerPersistsAcrossSnapshotSwap(t *testing.T) {
@@ -35,6 +36,7 @@ func TestBreakerPersistsAcrossSnapshotSwap(t *testing.T) {
 	defer breakerReg.Close()
 	outlierReg := outlier.NewRegistry(0, 0, nil)
 	defer outlierReg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	cfg := &config.Config{
 		Routes: []config.Route{{
@@ -57,7 +59,7 @@ func TestBreakerPersistsAcrossSnapshotSwap(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -94,7 +96,7 @@ func TestBreakerPersistsAcrossSnapshotSwap(t *testing.T) {
 		Pools: cfg.Pools,
 	}
 
-	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg, breakerReg, outlierReg)
+	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

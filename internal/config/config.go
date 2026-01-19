@@ -37,6 +37,7 @@ type RoutePolicy struct {
 	RequireMTLS                     bool                 `json:"require_mtls"`
 	MTLSClientCA                    string               `json:"mtls_client_ca"`
 	Cache                           CacheConfig          `json:"cache"`
+	Traffic                         TrafficConfig        `json:"traffic"`
 }
 
 type TLSConfig struct {
@@ -88,6 +89,37 @@ type CacheConfig struct {
 	CoalesceEnabled     *bool    `json:"coalesce_enabled"`
 	CoalesceTimeoutMS   int      `json:"coalesce_timeout_ms"`
 	OnlyIfContentLength *bool    `json:"only_if_content_length"`
+}
+
+type TrafficConfig struct {
+	Enabled      bool            `json:"enabled"`
+	StablePool   string          `json:"stable_pool"`
+	CanaryPool   string          `json:"canary_pool"`
+	StableWeight int             `json:"stable_weight"`
+	CanaryWeight int             `json:"canary_weight"`
+	Cohort       CohortConfig    `json:"cohort"`
+	Overload     OverloadConfig  `json:"overload"`
+	AutoDrain    AutoDrainConfig `json:"autodrain"`
+}
+
+type CohortConfig struct {
+	Enabled bool   `json:"enabled"`
+	Key     string `json:"key"`
+}
+
+type OverloadConfig struct {
+	Enabled        bool `json:"enabled"`
+	MaxInflight    int  `json:"max_inflight"`
+	MaxQueue       int  `json:"max_queue"`
+	QueueTimeoutMS int  `json:"queue_timeout_ms"`
+}
+
+type AutoDrainConfig struct {
+	Enabled             bool    `json:"enabled"`
+	WindowMS            int     `json:"window_ms"`
+	MinRequests         int     `json:"min_requests"`
+	ErrorRateMultiplier float64 `json:"error_rate_multiplier"`
+	CooloffMS           int     `json:"cooloff_ms"`
 }
 
 type HealthConfig struct {

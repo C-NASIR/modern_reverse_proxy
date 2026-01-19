@@ -16,6 +16,7 @@ import (
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 type Handler struct {
@@ -63,6 +64,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	endpointEjected := false
 	mtlsRouteRequired := false
 	mtlsVerified := false
+	trafficVariant := traffic.VariantStable
+	cohortMode := "random"
+	cohortKeyPresent := false
+	overloadRejected := false
+	autoDrainActive := false
+	trafficPlan := (*traffic.Plan)(nil)
 	tlsEnabled := r.TLS != nil
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
@@ -80,6 +87,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errorCategory := recorder.ErrorCategory()
 		if errorCategory == "" {
 			errorCategory = "none"
+		}
+
+		variantLabel := string(trafficVariant)
+		if variantLabel == "" {
+			variantLabel = string(traffic.VariantStable)
+		}
+		proxyError := errorCategory != "none"
+		if trafficPlan != nil && trafficPlan.Stats != nil {
+			trafficPlan.Stats.Record(trafficVariant, recorder.Status(), proxyError)
 		}
 
 		obs.LogAccess(obs.RequestContext{
@@ -101,6 +117,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			CacheStatus:          cacheStatus,
 			SnapshotVersion:      snapshotVersion,
 			SnapshotSource:       snapshotSource,
+			TrafficVariant:       variantLabel,
+			CohortMode:           cohortMode,
+			CohortKeyPresent:     cohortKeyPresent,
+			OverloadRejected:     overloadRejected,
+			AutoDrainActive:      autoDrainActive,
 			UserAgent:            r.UserAgent(),
 			RemoteAddr:           r.RemoteAddr,
 			BreakerState:         breakerState,
@@ -117,6 +138,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Metrics.ObserveRequest(routeID, poolKey, recorder.Status(), duration)
 			if errorCategory != "none" {
 				h.Metrics.RecordProxyError(routeID, errorCategory)
+			}
+			h.Metrics.RecordVariantRequest(routeID, variantLabel)
+			if proxyError || recorder.Status() >= http.StatusInternalServerError {
+				h.Metrics.RecordVariantError(routeID, variantLabel)
+			}
+			if overloadRejected {
+				h.Metrics.RecordOverloadReject(routeID)
 			}
 		}
 	}()
@@ -171,17 +199,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		mtlsVerified = true
 	}
 
-	poolKeyValue, ok := snap.Pools[route.PoolName]
+	trafficPlan = route.TrafficPlan
+	selectedPoolName := route.PoolName
+	selectedPoolKey := route.StablePoolKey
+	if selectedPoolKey == "" {
+		selectedPoolKey = route.ID + "::" + route.PoolName
+	}
+	if trafficPlan != nil {
+		variant, meta := trafficPlan.PickVariant(r)
+		trafficVariant = variant
+		cohortMode = meta.CohortMode
+		cohortKeyPresent = meta.CohortKeyPresent
+		autoDrainActive = meta.AutoDrainActive
+		if variant == traffic.VariantCanary && route.CanaryPoolName != "" {
+			selectedPoolName = route.CanaryPoolName
+			selectedPoolKey = route.CanaryPoolKey
+			if selectedPoolKey == "" {
+				selectedPoolKey = route.ID + "::" + route.CanaryPoolName
+			}
+		}
+	}
+	if trafficPlan != nil && trafficPlan.Overload != nil {
+		release, ok := trafficPlan.Overload.Acquire(r.Context())
+		if !ok {
+			overloadRejected = true
+			WriteOverload(recorder, requestID)
+			return
+		}
+		defer release()
+	}
+
+	poolKeyValue, ok := snap.Pools[selectedPoolName]
 	if !ok || poolKeyValue == "" {
 		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool not found")
 		return
 	}
 	poolKey = string(poolKeyValue)
 
-	stablePoolKey := route.StablePoolKey
-	if stablePoolKey == "" {
-		stablePoolKey = route.ID + "::" + route.PoolName
-	}
+	stablePoolKey := selectedPoolKey
 
 	cachePolicy := route.Policy.Cache
 	cacheKey := ""
@@ -201,7 +256,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	poolConfig, ok := snap.PoolConfigs[route.PoolName]
+	poolConfig, ok := snap.PoolConfigs[selectedPoolName]
 	if !ok {
 		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool config missing")
 		return

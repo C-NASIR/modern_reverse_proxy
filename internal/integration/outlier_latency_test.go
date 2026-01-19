@@ -15,6 +15,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestOutlierLatencyEjection(t *testing.T) {
@@ -48,6 +49,7 @@ func TestOutlierLatencyEjection(t *testing.T) {
 	defer obs.SetDefaultMetrics(nil)
 	outlierReg := outlier.NewRegistry(0, 0, metrics.RecordOutlierEjection)
 	defer outlierReg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	cfg := &config.Config{
 		Routes: []config.Route{{ID: "r1", Host: "example.local", PathPrefix: "/", Pool: "p1"}},
@@ -72,7 +74,7 @@ func TestOutlierLatencyEjection(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, outlierReg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

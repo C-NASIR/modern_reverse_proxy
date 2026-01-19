@@ -10,13 +10,15 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/server"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func startTLSProxy(t *testing.T, cfg *config.Config) (*server.Server, *runtime.Store, *registry.Registry) {
 	t.Helper()
 	reg := registry.NewRegistry(0, 0)
+	trafficReg := traffic.NewRegistry(0, 0)
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		reg.Close()
 		t.Fatalf("build snapshot: %v", err)

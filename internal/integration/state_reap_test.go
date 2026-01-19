@@ -14,6 +14,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestStateReapAfterPoolRemoval(t *testing.T) {
@@ -33,6 +34,7 @@ func TestStateReapAfterPoolRemoval(t *testing.T) {
 	defer breakerReg.Close()
 	outlierReg := outlier.NewRegistry(20*time.Millisecond, 100*time.Millisecond, nil)
 	defer outlierReg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	cfg := &config.Config{
 		Routes: []config.Route{{ID: "r1", Host: "example.local", PathPrefix: "/", Pool: "p1"}},
@@ -62,7 +64,7 @@ func TestStateReapAfterPoolRemoval(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -84,7 +86,7 @@ func TestStateReapAfterPoolRemoval(t *testing.T) {
 	}
 
 	emptyCfg := &config.Config{}
-	emptySnap, err := runtime.BuildSnapshot(emptyCfg, reg, breakerReg, outlierReg)
+	emptySnap, err := runtime.BuildSnapshot(emptyCfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build empty snapshot: %v", err)
 	}

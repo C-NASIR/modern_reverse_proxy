@@ -1,6 +1,10 @@
 package policy
 
-import "time"
+import (
+	"time"
+
+	"modern_reverse_proxy/internal/traffic"
+)
 
 type Policy struct {
 	RequestTimeout                time.Duration
@@ -51,11 +55,14 @@ type CachePolicy struct {
 }
 
 type Route struct {
-	ID            string
-	Host          string
-	PathPrefix    string
-	Methods       map[string]bool
-	PoolName      string
-	StablePoolKey string
-	Policy        Policy
+	ID             string
+	Host           string
+	PathPrefix     string
+	Methods        map[string]bool
+	PoolName       string
+	CanaryPoolName string
+	StablePoolKey  string
+	CanaryPoolKey  string
+	TrafficPlan    *traffic.Plan
+	Policy         Policy
 }

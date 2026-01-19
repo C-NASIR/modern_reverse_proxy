@@ -21,6 +21,8 @@ type ProxyErrorBody struct {
 	Message       string `json:"message"`
 }
 
+const overloadRetryAfterSeconds = "1"
+
 func WriteProxyError(w http.ResponseWriter, requestID string, status int, category string, message string) {
 	if recorder, ok := w.(errorCategoryWriter); ok {
 		recorder.SetErrorCategory(category)
@@ -34,6 +36,11 @@ func WriteProxyError(w http.ResponseWriter, requestID string, status int, catego
 		ErrorCategory: category,
 		Message:       message,
 	})
+}
+
+func WriteOverload(w http.ResponseWriter, requestID string) {
+	w.Header().Set("Retry-After", overloadRetryAfterSeconds)
+	WriteProxyError(w, requestID, http.StatusServiceUnavailable, "overloaded", "overloaded")
 }
 
 func WithRequestID(ctx context.Context, requestID string) context.Context {

@@ -13,6 +13,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestRouterPolicyRouting(t *testing.T) {
@@ -53,7 +54,8 @@ func TestRouterPolicyRouting(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	trafficReg := traffic.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -117,7 +119,8 @@ func TestRequestTimeoutReturnsGatewayTimeout(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	trafficReg := traffic.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

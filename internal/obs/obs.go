@@ -21,6 +21,11 @@ type RequestContext struct {
 	CacheStatus          string
 	SnapshotVersion      string
 	SnapshotSource       string
+	TrafficVariant       string
+	CohortMode           string
+	CohortKeyPresent     bool
+	OverloadRejected     bool
+	AutoDrainActive      bool
 	UserAgent            string
 	RemoteAddr           string
 	BreakerState         string

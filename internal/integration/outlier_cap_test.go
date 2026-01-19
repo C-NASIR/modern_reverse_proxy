@@ -13,6 +13,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestOutlierCapNeverEjectsAll(t *testing.T) {
@@ -39,6 +40,7 @@ func TestOutlierCapNeverEjectsAll(t *testing.T) {
 	defer reg.Close()
 	outlierReg := outlier.NewRegistry(0, 0, nil)
 	defer outlierReg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	cfg := &config.Config{
 		Routes: []config.Route{{ID: "r1", Host: "example.local", PathPrefix: "/", Pool: "p1"}},
@@ -59,7 +61,7 @@ func TestOutlierCapNeverEjectsAll(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, outlierReg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, outlierReg, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

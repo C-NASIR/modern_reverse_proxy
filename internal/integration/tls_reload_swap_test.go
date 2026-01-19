@@ -11,6 +11,7 @@ import (
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestTLSReloadSwap(t *testing.T) {
@@ -59,7 +60,8 @@ func TestTLSReloadSwap(t *testing.T) {
 		Pools:  cfg1.Pools,
 	}
 
-	snap2, err := runtime.BuildSnapshot(cfg2, reg, nil, nil)
+	trafficReg := traffic.NewRegistry(0, 0)
+	snap2, err := runtime.BuildSnapshot(cfg2, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot2: %v", err)
 	}

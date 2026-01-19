@@ -18,6 +18,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/router"
 	"modern_reverse_proxy/internal/tlsstore"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 type Snapshot struct {
@@ -102,6 +103,7 @@ const (
 	defaultOutlierLatencyConsecutive     = 3
 	defaultCacheCoalesceTimeout          = 5 * time.Second
 	defaultTLSAddr                       = "127.0.0.1:8443"
+	defaultTrafficStableWeight           = 100
 )
 
 var (
@@ -109,7 +111,7 @@ var (
 	defaultRetryErrors   = []string{"dial", "timeout"}
 )
 
-func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry) (*Snapshot, error) {
+func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry, trafficReg *traffic.Registry) (*Snapshot, error) {
 	_ = breakerReg
 	success := false
 	defer func() {
@@ -129,6 +131,9 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 	}
 	if reg == nil {
 		return nil, errors.New("registry is nil")
+	}
+	if trafficReg == nil {
+		trafficReg = traffic.NewRegistry(0, 0)
 	}
 
 	pools := make(map[string]pool.PoolKey, len(cfg.Pools))
@@ -253,21 +258,62 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		}
 		policyRuntime.Cache = cachePolicy
 
-		stablePoolKey := fmt.Sprintf("%s::%s", route.ID, route.Pool)
-		if outlierReg != nil {
-			poolCfg := cfg.Pools[route.Pool]
-			outlierCfg := poolConfigs[route.Pool].Outlier
-			outlierReg.Reconcile(stablePoolKey, poolCfg.Endpoints, outlierCfg)
+		trafficCfg, stablePoolName, canaryPoolName, err := trafficConfigFromRoute(route.ID, route.Policy.Traffic)
+		if err != nil {
+			return nil, err
+		}
+
+		stablePoolKey := ""
+		canaryPoolKey := ""
+		trafficPlan := (*traffic.Plan)(nil)
+		if trafficCfg.Enabled {
+			if _, ok := pools[stablePoolName]; !ok {
+				return nil, fmt.Errorf("route %q traffic stable_pool missing pool %q", route.ID, stablePoolName)
+			}
+			if canaryPoolName != "" {
+				if _, ok := pools[canaryPoolName]; !ok {
+					return nil, fmt.Errorf("route %q traffic canary_pool missing pool %q", route.ID, canaryPoolName)
+				}
+			}
+			stablePoolKey = fmt.Sprintf("%s::%s", route.ID, stablePoolName)
+			if canaryPoolName != "" {
+				canaryPoolKey = fmt.Sprintf("%s::%s", route.ID, canaryPoolName)
+			}
+			trafficPlan, err = trafficReg.Plan(route.ID, trafficCfg)
+			if err != nil {
+				return nil, err
+			}
+			if outlierReg != nil {
+				poolCfg := cfg.Pools[stablePoolName]
+				outlierCfg := poolConfigs[stablePoolName].Outlier
+				outlierReg.Reconcile(stablePoolKey, poolCfg.Endpoints, outlierCfg)
+				if canaryPoolName != "" {
+					poolCfg = cfg.Pools[canaryPoolName]
+					outlierCfg = poolConfigs[canaryPoolName].Outlier
+					outlierReg.Reconcile(canaryPoolKey, poolCfg.Endpoints, outlierCfg)
+				}
+			}
+		} else {
+			stablePoolName = route.Pool
+			stablePoolKey = fmt.Sprintf("%s::%s", route.ID, route.Pool)
+			if outlierReg != nil {
+				poolCfg := cfg.Pools[route.Pool]
+				outlierCfg := poolConfigs[route.Pool].Outlier
+				outlierReg.Reconcile(stablePoolKey, poolCfg.Endpoints, outlierCfg)
+			}
 		}
 
 		routes = append(routes, policy.Route{
-			ID:            route.ID,
-			Host:          route.Host,
-			PathPrefix:    route.PathPrefix,
-			Methods:       methods,
-			PoolName:      route.Pool,
-			StablePoolKey: stablePoolKey,
-			Policy:        policyRuntime,
+			ID:             route.ID,
+			Host:           route.Host,
+			PathPrefix:     route.PathPrefix,
+			Methods:        methods,
+			PoolName:       stablePoolName,
+			CanaryPoolName: canaryPoolName,
+			StablePoolKey:  stablePoolKey,
+			CanaryPoolKey:  canaryPoolKey,
+			TrafficPlan:    trafficPlan,
+			Policy:         policyRuntime,
 		})
 	}
 
@@ -401,6 +447,82 @@ func cachePolicyFromConfig(routeID string, cacheCfg config.CacheConfig) (policy.
 		CoalesceTimeout:     coalesceTimeout,
 		OnlyIfContentLength: onlyIfContentLength,
 	}, nil
+}
+
+func trafficConfigFromRoute(routeID string, cfg config.TrafficConfig) (traffic.Config, string, string, error) {
+	if !cfg.Enabled {
+		return traffic.Config{}, "", "", nil
+	}
+	stablePool := strings.TrimSpace(cfg.StablePool)
+	if stablePool == "" {
+		return traffic.Config{}, "", "", fmt.Errorf("route %q traffic stable_pool missing", routeID)
+	}
+	canaryPool := strings.TrimSpace(cfg.CanaryPool)
+	stableWeight := cfg.StableWeight
+	canaryWeight := cfg.CanaryWeight
+	if stableWeight < 0 || canaryWeight < 0 {
+		return traffic.Config{}, "", "", fmt.Errorf("route %q traffic weights must be non-negative", routeID)
+	}
+	if canaryPool == "" && stableWeight == 0 && canaryWeight == 0 {
+		stableWeight = defaultTrafficStableWeight
+	}
+	if canaryPool == "" && canaryWeight > 0 {
+		return traffic.Config{}, "", "", fmt.Errorf("route %q traffic canary_pool required when canary_weight > 0", routeID)
+	}
+	if stableWeight == 0 && canaryWeight == 0 {
+		return traffic.Config{}, "", "", fmt.Errorf("route %q traffic weights cannot both be zero", routeID)
+	}
+	if cfg.Cohort.Enabled && strings.TrimSpace(cfg.Cohort.Key) == "" {
+		return traffic.Config{}, "", "", fmt.Errorf("route %q traffic cohort key missing", routeID)
+	}
+	if cfg.Overload.Enabled {
+		if cfg.Overload.MaxInflight <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic overload max_inflight must be > 0", routeID)
+		}
+		if cfg.Overload.MaxQueue < 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic overload max_queue must be >= 0", routeID)
+		}
+		if cfg.Overload.MaxQueue > 0 && cfg.Overload.QueueTimeoutMS <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic overload queue_timeout_ms must be > 0", routeID)
+		}
+	}
+	if cfg.AutoDrain.Enabled {
+		if cfg.AutoDrain.WindowMS <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic autodrain window_ms must be > 0", routeID)
+		}
+		if cfg.AutoDrain.MinRequests <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic autodrain min_requests must be > 0", routeID)
+		}
+		if cfg.AutoDrain.ErrorRateMultiplier <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic autodrain error_rate_multiplier must be > 0", routeID)
+		}
+		if cfg.AutoDrain.CooloffMS <= 0 {
+			return traffic.Config{}, "", "", fmt.Errorf("route %q traffic autodrain cooloff_ms must be > 0", routeID)
+		}
+	}
+
+	return traffic.Config{
+		Enabled:      cfg.Enabled,
+		StableWeight: stableWeight,
+		CanaryWeight: canaryWeight,
+		Cohort: traffic.CohortConfig{
+			Enabled: cfg.Cohort.Enabled,
+			Key:     strings.TrimSpace(cfg.Cohort.Key),
+		},
+		Overload: traffic.OverloadConfig{
+			Enabled:      cfg.Overload.Enabled,
+			MaxInflight:  cfg.Overload.MaxInflight,
+			MaxQueue:     cfg.Overload.MaxQueue,
+			QueueTimeout: durationOrZero(cfg.Overload.QueueTimeoutMS),
+		},
+		AutoDrain: traffic.AutoDrainConfig{
+			Enabled:             cfg.AutoDrain.Enabled,
+			Window:              durationOrZero(cfg.AutoDrain.WindowMS),
+			MinRequests:         cfg.AutoDrain.MinRequests,
+			ErrorRateMultiplier: cfg.AutoDrain.ErrorRateMultiplier,
+			Cooloff:             durationOrZero(cfg.AutoDrain.CooloffMS),
+		},
+	}, stablePool, canaryPool, nil
 }
 
 func stringOrDefault(value string, fallback string) string {

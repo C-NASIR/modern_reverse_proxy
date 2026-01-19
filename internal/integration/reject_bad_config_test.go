@@ -12,6 +12,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestRejectBadConfigKeepsOldSnapshot(t *testing.T) {
@@ -38,7 +39,8 @@ func TestRejectBadConfigKeepsOldSnapshot(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(goodCfg, reg, nil, nil)
+	trafficReg := traffic.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(goodCfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -68,7 +70,7 @@ func TestRejectBadConfigKeepsOldSnapshot(t *testing.T) {
 		},
 	}
 
-	if _, err := runtime.BuildSnapshot(badCfg, reg, nil, nil); err == nil {
+	if _, err := runtime.BuildSnapshot(badCfg, reg, nil, nil, trafficReg); err == nil {
 		t.Fatalf("expected build snapshot to fail")
 	}
 

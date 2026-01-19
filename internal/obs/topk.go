@@ -7,20 +7,20 @@ import (
 )
 
 const (
-	defaultRouteTopK       = 200
-	defaultPoolTopK        = 200
+	defaultRouteTopK         = 200
+	defaultPoolTopK          = 200
 	defaultRecomputeInterval = 10 * time.Second
 )
 
 type TopK struct {
-	mu          sync.Mutex
-	routeCounts map[string]int64
-	poolCounts  map[string]int64
-	routeTop    map[string]struct{}
-	poolTop     map[string]struct{}
-	routeK      int
-	poolK       int
-	interval    time.Duration
+	mu            sync.Mutex
+	routeCounts   map[string]int64
+	poolCounts    map[string]int64
+	routeTop      map[string]struct{}
+	poolTop       map[string]struct{}
+	routeK        int
+	poolK         int
+	interval      time.Duration
 	lastRecompute time.Time
 }
 
@@ -36,13 +36,13 @@ func NewTopK(routeK int, poolK int, interval time.Duration) *TopK {
 	}
 
 	t := &TopK{
-		routeCounts: make(map[string]int64),
-		poolCounts:  make(map[string]int64),
-		routeTop:    make(map[string]struct{}),
-		poolTop:     make(map[string]struct{}),
-		routeK:      routeK,
-		poolK:       poolK,
-		interval:    interval,
+		routeCounts:   make(map[string]int64),
+		poolCounts:    make(map[string]int64),
+		routeTop:      make(map[string]struct{}),
+		poolTop:       make(map[string]struct{}),
+		routeK:        routeK,
+		poolK:         poolK,
+		interval:      interval,
 		lastRecompute: time.Time{},
 	}
 	go t.recomputeLoop()

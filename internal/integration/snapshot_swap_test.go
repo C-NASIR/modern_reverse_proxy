@@ -14,6 +14,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestSnapshotSwapAtomicity(t *testing.T) {
@@ -64,7 +65,8 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 		t.Fatalf("parse config: %v", err)
 	}
 	reg := registry.NewRegistry(0, 0)
-	initialSnap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	trafficReg := traffic.NewRegistry(0, 0)
+	initialSnap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse next config: %v", err)
 	}
-	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg, nil, nil)
+	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build next snapshot: %v", err)
 	}

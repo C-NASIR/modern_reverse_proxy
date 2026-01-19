@@ -16,6 +16,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func TestRetryIdempotentDialFailure(t *testing.T) {
@@ -30,6 +31,7 @@ func TestRetryIdempotentDialFailure(t *testing.T) {
 
 	reg := registry.NewRegistry(0, 0)
 	defer reg.Close()
+	trafficReg := traffic.NewRegistry(0, 0)
 
 	retryReg := registry.NewRetryRegistry(0, 0)
 	defer retryReg.Close()
@@ -59,7 +61,7 @@ func TestRetryIdempotentDialFailure(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

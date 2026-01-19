@@ -15,6 +15,7 @@ import (
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/server"
+	"modern_reverse_proxy/internal/traffic"
 )
 
 func main() {
@@ -35,8 +36,9 @@ func main() {
 	obs.SetDefaultMetrics(metrics)
 	breakerReg := breaker.NewRegistry(0, 0)
 	outlierReg := outlier.NewRegistry(0, 0, metrics.RecordOutlierEjection)
+	trafficReg := traffic.NewRegistry(0, 0)
 
-	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		log.Fatalf("build snapshot: %v", err)
 	}

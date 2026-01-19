@@ -32,6 +32,9 @@ type Metrics struct {
 	cacheRequests          *prometheus.CounterVec
 	cacheCoalesceBreakaway *prometheus.CounterVec
 	cacheStoreFail         *prometheus.CounterVec
+	variantRequests        *prometheus.CounterVec
+	variantErrors          *prometheus.CounterVec
+	overloadRejects        *prometheus.CounterVec
 	requestDuration        *prometheus.HistogramVec
 	upstreamRoundTrip      *prometheus.HistogramVec
 	snapshotInfo           *prometheus.GaugeVec
@@ -127,6 +130,21 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Total cache store failures",
 	}, []string{"route"})
 
+	variantRequests := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_variant_requests_total",
+		Help: "Total requests per traffic variant",
+	}, []string{"route", "variant"})
+
+	variantErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_variant_errors_total",
+		Help: "Total errors per traffic variant",
+	}, []string{"route", "variant"})
+
+	overloadRejects := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_overload_reject_total",
+		Help: "Total overload rejections",
+	}, []string{"route"})
+
 	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_request_duration_seconds",
 		Help:    "Proxy request duration",
@@ -149,7 +167,7 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Active snapshot metadata",
 	}, []string{"version", "source"})
 
-	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, variantRequests, variantErrors, overloadRejects, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
 
 	return &Metrics{
 		registry:               registry,
@@ -167,6 +185,9 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		cacheRequests:          cacheRequests,
 		cacheCoalesceBreakaway: cacheCoalesceBreakaway,
 		cacheStoreFail:         cacheStoreFail,
+		variantRequests:        variantRequests,
+		variantErrors:          variantErrors,
+		overloadRejects:        overloadRejects,
 		requestDuration:        requestDuration,
 		upstreamRoundTrip:      upstreamRoundTrip,
 		snapshotInfo:           snapshotInfoGauge,
@@ -370,6 +391,51 @@ func (m *Metrics) RecordCacheStoreFail(routeID string) {
 	m.topk.ObserveHit(routeID, "")
 	canonRoute := m.topk.CanonRoute(routeID)
 	m.cacheStoreFail.WithLabelValues(canonRoute).Inc()
+}
+
+func (m *Metrics) RecordVariantRequest(routeID string, variant string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if variant == "" {
+		variant = "unknown"
+	}
+	m.topk.ObserveHit(routeID, "")
+	canonRoute := m.topk.CanonRoute(routeID)
+	m.variantRequests.WithLabelValues(canonRoute, variant).Inc()
+}
+
+func (m *Metrics) RecordVariantError(routeID string, variant string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if variant == "" {
+		variant = "unknown"
+	}
+	m.topk.ObserveHit(routeID, "")
+	canonRoute := m.topk.CanonRoute(routeID)
+	m.variantErrors.WithLabelValues(canonRoute, variant).Inc()
+}
+
+func (m *Metrics) RecordOverloadReject(routeID string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit(routeID, "")
+	canonRoute := m.topk.CanonRoute(routeID)
+	m.overloadRejects.WithLabelValues(canonRoute).Inc()
 }
 
 func (m *Metrics) SetBreakerOpen(poolKey string, open bool) {
