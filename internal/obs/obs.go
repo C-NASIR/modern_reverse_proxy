@@ -26,4 +26,7 @@ type RequestContext struct {
 	BreakerDenied        bool
 	OutlierIgnored       bool
 	EndpointEjected      bool
+	TLS                  bool
+	MTLSRouteRequired    bool
+	MTLSVerified         bool
 }

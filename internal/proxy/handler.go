@@ -53,6 +53,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	breakerDenied := false
 	outlierIgnored := false
 	endpointEjected := false
+	mtlsRouteRequired := false
+	mtlsVerified := false
+	tlsEnabled := r.TLS != nil
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
 	}
@@ -95,6 +98,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			BreakerDenied:        breakerDenied,
 			OutlierIgnored:       outlierIgnored,
 			EndpointEjected:      endpointEjected,
+			TLS:                  tlsEnabled,
+			MTLSRouteRequired:    mtlsRouteRequired,
+			MTLSVerified:         mtlsVerified,
 		})
 
 		if h != nil && h.Metrics != nil {
@@ -127,6 +133,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeID = route.ID
+	mtlsRouteRequired = route.Policy.RequireMTLS
+	if route.Policy.RequireMTLS {
+		if snap.TLSStore == nil {
+			if h.Metrics != nil {
+				h.Metrics.RecordMTLSReject(route.ID)
+			}
+			WriteProxyError(recorder, requestID, http.StatusForbidden, "mtls_required", "client certificate required")
+			return
+		}
+		var rawCerts [][]byte
+		if r.TLS != nil {
+			rawCerts = make([][]byte, 0, len(r.TLS.PeerCertificates))
+			for _, cert := range r.TLS.PeerCertificates {
+				if cert == nil {
+					continue
+				}
+				rawCerts = append(rawCerts, cert.Raw)
+			}
+		}
+		if err := snap.TLSStore.VerifyClientCert(rawCerts, nil); err != nil {
+			if h.Metrics != nil {
+				h.Metrics.RecordMTLSReject(route.ID)
+			}
+			WriteProxyError(recorder, requestID, http.StatusForbidden, "mtls_required", "client certificate required")
+			return
+		}
+		mtlsVerified = true
+	}
 
 	poolKeyValue, ok := snap.Pools[route.PoolName]
 	if !ok || poolKeyValue == "" {

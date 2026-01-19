@@ -9,6 +9,8 @@ type Policy struct {
 	Retry                         RetryPolicy
 	RetryBudget                   RetryBudgetPolicy
 	ClientRetryCap                ClientRetryCapPolicy
+	RequireMTLS                   bool
+	MTLSClientCA                  string
 }
 
 type RetryPolicy struct {

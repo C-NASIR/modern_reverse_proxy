@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,12 +17,17 @@ import (
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/router"
+	"modern_reverse_proxy/internal/tlsstore"
 )
 
 type Snapshot struct {
 	Router      *router.Router
 	Pools       map[string]pool.PoolKey
 	PoolConfigs map[string]PoolConfig
+	TLSEnabled  bool
+	TLSStore    *tlsstore.Store
+	TLSConfig   *tls.Config
+	TLSAddr     string
 	Version     string
 	CreatedAt   time.Time
 	Source      string
@@ -90,6 +96,7 @@ const (
 	defaultOutlierLatencyMinSamples      = 50
 	defaultOutlierLatencyMultiplier      = 3
 	defaultOutlierLatencyConsecutive     = 3
+	defaultTLSAddr                       = "127.0.0.1:8443"
 )
 
 var (
@@ -170,6 +177,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 
 	seenIDs := make(map[string]struct{}, len(cfg.Routes))
 	routes := make([]policy.Route, 0, len(cfg.Routes))
+	requiresMTLS := false
 	for _, route := range cfg.Routes {
 		if route.Host == "" {
 			return nil, fmt.Errorf("route %q host is empty", route.ID)
@@ -195,6 +203,13 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		}
 		if len(methods) == 0 {
 			methods = nil
+		}
+
+		if route.Policy.RequireMTLS && route.Policy.MTLSClientCA != "" && route.Policy.MTLSClientCA != "default" {
+			return nil, fmt.Errorf("route %q mtls_client_ca must be default", route.ID)
+		}
+		if route.Policy.RequireMTLS {
+			requiresMTLS = true
 		}
 
 		policyRuntime := policy.Policy{
@@ -223,6 +238,8 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 				Burst:              nonNegative(route.Policy.ClientRetryCap.Burst),
 				LRUSize:            intOrDefault(route.Policy.ClientRetryCap.LRUSize, defaultRetryClientLRUSize),
 			},
+			RequireMTLS:  route.Policy.RequireMTLS,
+			MTLSClientCA: route.Policy.MTLSClientCA,
 		}
 
 		stablePoolKey := fmt.Sprintf("%s::%s", route.ID, route.Pool)
@@ -248,10 +265,63 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		return nil, errors.New("router build failed")
 	}
 
+	var tlsStore *tlsstore.Store
+	var tlsConfig *tls.Config
+	tlsAddr := ""
+	if cfg.TLS.Enabled {
+		if len(cfg.TLS.Certs) == 0 {
+			return nil, errors.New("tls enabled but no certs configured")
+		}
+		if requiresMTLS && cfg.TLS.ClientCAFile == "" {
+			return nil, errors.New("mtls required but client_ca_file missing")
+		}
+		certSpecs := make([]tlsstore.CertSpec, 0, len(cfg.TLS.Certs))
+		for _, cert := range cfg.TLS.Certs {
+			certSpecs = append(certSpecs, tlsstore.CertSpec{
+				ServerName: cert.ServerName,
+				CertFile:   cert.CertFile,
+				KeyFile:    cert.KeyFile,
+			})
+		}
+		var err error
+		tlsStore, err = tlsstore.LoadStore(certSpecs, cfg.TLS.ClientCAFile)
+		if err != nil {
+			return nil, err
+		}
+		minVersion, err := parseTLSMinVersion(cfg.TLS.MinVersion)
+		if err != nil {
+			return nil, err
+		}
+		cipherSuites, err := parseCipherSuites(cfg.TLS.CipherSuites)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig = &tls.Config{
+			GetCertificate: tlsStore.GetCertificate,
+			MinVersion:     minVersion,
+			ClientAuth:     tls.RequestClientCert,
+			NextProtos:     []string{"h2", "http/1.1"},
+		}
+		if len(cipherSuites) > 0 {
+			tlsConfig.CipherSuites = cipherSuites
+		}
+		tlsAddr = cfg.TLS.Addr
+		if tlsAddr == "" {
+			tlsAddr = defaultTLSAddr
+		}
+	}
+	if requiresMTLS && !cfg.TLS.Enabled {
+		return nil, errors.New("mtls required but tls disabled")
+	}
+
 	snapshot := &Snapshot{
 		Router:      compiled,
 		Pools:       pools,
 		PoolConfigs: poolConfigs,
+		TLSEnabled:  cfg.TLS.Enabled,
+		TLSStore:    tlsStore,
+		TLSConfig:   tlsConfig,
+		TLSAddr:     tlsAddr,
 		Version:     fmt.Sprintf("v-%d", time.Now().UnixNano()),
 		CreatedAt:   time.Now().UTC(),
 		Source:      "file",
@@ -321,4 +391,41 @@ func retryErrorMap(values []string) map[string]bool {
 		result[value] = true
 	}
 	return result
+}
+
+func parseTLSMinVersion(value string) (uint16, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || trimmed == "1.2" {
+		return tls.VersionTLS12, nil
+	}
+	if trimmed == "1.3" {
+		return tls.VersionTLS13, nil
+	}
+	return 0, fmt.Errorf("unsupported tls min_version %q", value)
+}
+
+func parseCipherSuites(values []string) ([]uint16, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	suiteMap := make(map[string]uint16)
+	for _, suite := range tls.CipherSuites() {
+		suiteMap[suite.Name] = suite.ID
+	}
+	for _, suite := range tls.InsecureCipherSuites() {
+		suiteMap[suite.Name] = suite.ID
+	}
+
+	result := make([]uint16, 0, len(values))
+	for _, name := range values {
+		if name == "" {
+			continue
+		}
+		id, ok := suiteMap[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown tls cipher suite %q", name)
+		}
+		result = append(result, id)
+	}
+	return result, nil
 }

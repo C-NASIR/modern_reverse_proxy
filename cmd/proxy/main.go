@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"modern_reverse_proxy/internal/proxy"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
+	"modern_reverse_proxy/internal/server"
 )
 
 func main() {
@@ -58,6 +60,20 @@ func main() {
 		listenAddr = "127.0.0.1:8080"
 	}
 
-	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, mux))
+	var tlsBaseConfig *tls.Config
+	if snap.TLSEnabled {
+		tlsBaseConfig = server.BaseTLSConfig(store)
+	}
+
+	serverHandle, err := server.StartServers(mux, tlsBaseConfig, listenAddr, snap.TLSAddr)
+	if err != nil {
+		log.Fatalf("start servers: %v", err)
+	}
+	if serverHandle.HTTPAddr != "" {
+		log.Printf("listening on http://%s", serverHandle.HTTPAddr)
+	}
+	if serverHandle.TLSAddr != "" {
+		log.Printf("listening on https://%s", serverHandle.TLSAddr)
+	}
+	select {}
 }

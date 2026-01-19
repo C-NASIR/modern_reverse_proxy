@@ -28,6 +28,7 @@ type Metrics struct {
 	circuitOpen          *prometheus.CounterVec
 	outlierEjections     *prometheus.CounterVec
 	outlierFailOpen      *prometheus.CounterVec
+	mtlsReject           *prometheus.CounterVec
 	requestDuration      *prometheus.HistogramVec
 	upstreamRoundTrip    *prometheus.HistogramVec
 	snapshotInfo         *prometheus.GaugeVec
@@ -103,6 +104,11 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Total outlier fail-open events",
 	}, []string{"pool"})
 
+	mtlsReject := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_mtls_reject_total",
+		Help: "Total mTLS route rejections",
+	}, []string{"route"})
+
 	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_request_duration_seconds",
 		Help:    "Proxy request duration",
@@ -125,7 +131,7 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Active snapshot metadata",
 	}, []string{"version", "source"})
 
-	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
 
 	return &Metrics{
 		registry:             registry,
@@ -139,6 +145,7 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		circuitOpen:          circuitOpen,
 		outlierEjections:     outlierEjections,
 		outlierFailOpen:      outlierFailOpen,
+		mtlsReject:           mtlsReject,
 		requestDuration:      requestDuration,
 		upstreamRoundTrip:    upstreamRoundTrip,
 		snapshotInfo:         snapshotInfoGauge,
@@ -288,6 +295,18 @@ func (m *Metrics) RecordOutlierFailOpen(poolKey string) {
 	m.topk.ObserveHit("", poolKey)
 	canonPool := m.topk.CanonPool(poolKey)
 	m.outlierFailOpen.WithLabelValues(canonPool).Inc()
+}
+
+func (m *Metrics) RecordMTLSReject(routeID string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	canonRoute := m.topk.CanonRoute(routeID)
+	m.mtlsReject.WithLabelValues(canonRoute).Inc()
 }
 
 func (m *Metrics) SetBreakerOpen(poolKey string, open bool) {

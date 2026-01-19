@@ -6,6 +6,7 @@ import (
 
 type Config struct {
 	ListenAddr string          `json:"listen_addr"`
+	TLS        TLSConfig       `json:"tls"`
 	Routes     []Route         `json:"routes"`
 	Pools      map[string]Pool `json:"pools"`
 }
@@ -33,6 +34,23 @@ type RoutePolicy struct {
 	Retry                           RetryConfig          `json:"retry"`
 	RetryBudget                     RetryBudgetConfig    `json:"retry_budget"`
 	ClientRetryCap                  ClientRetryCapConfig `json:"client_retry_cap"`
+	RequireMTLS                     bool                 `json:"require_mtls"`
+	MTLSClientCA                    string               `json:"mtls_client_ca"`
+}
+
+type TLSConfig struct {
+	Enabled      bool      `json:"enabled"`
+	Addr         string    `json:"addr"`
+	Certs        []TLSCert `json:"certs"`
+	ClientCAFile string    `json:"client_ca_file"`
+	MinVersion   string    `json:"min_version"`
+	CipherSuites []string  `json:"cipher_suites"`
+}
+
+type TLSCert struct {
+	ServerName string `json:"server_name"`
+	CertFile   string `json:"cert_file"`
+	KeyFile    string `json:"key_file"`
 }
 
 type RetryConfig struct {

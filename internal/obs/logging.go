@@ -31,6 +31,9 @@ type AccessLogEntry struct {
 	BreakerDenied        bool   `json:"breaker_denied"`
 	OutlierIgnored       bool   `json:"outlier_ignored"`
 	EndpointEjected      bool   `json:"endpoint_ejected"`
+	TLS                  bool   `json:"tls"`
+	MTLSRouteRequired    bool   `json:"mtls_route_required"`
+	MTLSVerified         bool   `json:"mtls_verified"`
 }
 
 func LogAccess(ctx RequestContext) {
@@ -58,6 +61,9 @@ func LogAccess(ctx RequestContext) {
 		BreakerDenied:        ctx.BreakerDenied,
 		OutlierIgnored:       ctx.OutlierIgnored,
 		EndpointEjected:      ctx.EndpointEjected,
+		TLS:                  ctx.TLS,
+		MTLSRouteRequired:    ctx.MTLSRouteRequired,
+		MTLSVerified:         ctx.MTLSVerified,
 	}
 
 	data, err := json.Marshal(entry)
