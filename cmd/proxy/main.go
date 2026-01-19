@@ -25,6 +25,7 @@ func main() {
 		log.Fatalf("parse config: %v", err)
 	}
 	reg := registry.NewRegistry(0, 0)
+	retryReg := registry.NewRetryRegistry(0, 0)
 	metrics := obs.NewMetrics(obs.MetricsConfig{})
 	obs.SetDefaultMetrics(metrics)
 
@@ -35,10 +36,11 @@ func main() {
 
 	store := runtime.NewStore(snap)
 	handler := &proxy.Handler{
-		Store:    store,
-		Registry: reg,
-		Engine:   proxy.NewEngine(reg, metrics),
-		Metrics:  metrics,
+		Store:         store,
+		Registry:      reg,
+		RetryRegistry: retryReg,
+		Engine:        proxy.NewEngine(reg, retryReg, metrics),
+		Metrics:       metrics,
 	}
 
 	mux := http.NewServeMux()

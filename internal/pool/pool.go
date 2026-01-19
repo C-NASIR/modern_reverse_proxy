@@ -25,6 +25,7 @@ type PoolRuntime struct {
 	key          PoolKey
 	healthConfig health.Config
 	endpoints    map[string]*EndpointRuntime
+	order        []string
 	rr           uint64
 	mu           sync.RWMutex
 	drainTimeout time.Duration
@@ -45,6 +46,7 @@ func (p *PoolRuntime) Reconcile(endpoints []string, cfg health.Config, drainTime
 
 	p.healthConfig = cfg
 	p.drainTimeout = drainTimeout
+	p.order = append(p.order[:0], endpoints...)
 	desired := make(map[string]struct{}, len(endpoints))
 
 	for _, addr := range endpoints {
@@ -73,8 +75,15 @@ func (p *PoolRuntime) Pick() (string, bool) {
 	}
 
 	all := make([]*EndpointRuntime, 0, len(p.endpoints))
-	for _, endpoint := range p.endpoints {
-		all = append(all, endpoint)
+	for _, addr := range p.order {
+		if endpoint := p.endpoints[addr]; endpoint != nil {
+			all = append(all, endpoint)
+		}
+	}
+	if len(all) == 0 {
+		for _, endpoint := range p.endpoints {
+			all = append(all, endpoint)
+		}
 	}
 	p.mu.RUnlock()
 
@@ -129,21 +138,21 @@ func (p *PoolRuntime) Reap(now time.Time) []string {
 }
 
 type EndpointRuntime struct {
-	addr                      string
-	state                     atomic.Int32
-	ejectUntil                atomic.Int64
-	consecutiveActiveFails    atomic.Int32
-	consecutiveActiveSuccess  atomic.Int32
-	consecutivePassiveFails   atomic.Int32
-	inflight                  atomic.Int64
-	ejectCount                atomic.Int32
-	lastHealthyAt             atomic.Int64
-	lastSeen                  atomic.Int64
-	drainUntil                atomic.Int64
-	config                    atomic.Value
-	activeMu                  sync.Mutex
-	stopCh                    chan struct{}
-	stopOnce                  sync.Once
+	addr                     string
+	state                    atomic.Int32
+	ejectUntil               atomic.Int64
+	consecutiveActiveFails   atomic.Int32
+	consecutiveActiveSuccess atomic.Int32
+	consecutivePassiveFails  atomic.Int32
+	inflight                 atomic.Int64
+	ejectCount               atomic.Int32
+	lastHealthyAt            atomic.Int64
+	lastSeen                 atomic.Int64
+	drainUntil               atomic.Int64
+	config                   atomic.Value
+	activeMu                 sync.Mutex
+	stopCh                   chan struct{}
+	stopOnce                 sync.Once
 }
 
 func NewEndpointRuntime(addr string, cfg health.Config) *EndpointRuntime {

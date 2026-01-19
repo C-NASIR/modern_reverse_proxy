@@ -11,10 +11,11 @@ import (
 )
 
 type Handler struct {
-	Store    *runtime.Store
-	Registry *registry.Registry
-	Engine   *Engine
-	Metrics  *obs.Metrics
+	Store         *runtime.Store
+	Registry      *registry.Registry
+	RetryRegistry *registry.RetryRegistry
+	Engine        *Engine
+	Metrics       *obs.Metrics
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +41,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	snapshotVersion := "none"
 	snapshotSource := "none"
 	bytesIn := int64(0)
+	retryCount := 0
+	retryLastReason := ""
+	retryBudgetExhausted := false
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
 	}
@@ -59,22 +63,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		obs.LogAccess(obs.RequestContext{
-			RequestID:       requestID,
-			Method:          r.Method,
-			Host:            r.Host,
-			Path:            r.URL.Path,
-			RouteID:         routeID,
-			PoolKey:         poolKey,
-			UpstreamAddr:    upstreamAddr,
-			Status:          recorder.Status(),
-			Duration:        duration,
-			BytesIn:         bytesIn,
-			BytesOut:        recorder.BytesWritten(),
-			ErrorCategory:   errorCategory,
-			SnapshotVersion: snapshotVersion,
-			SnapshotSource:  snapshotSource,
-			UserAgent:       r.UserAgent(),
-			RemoteAddr:      r.RemoteAddr,
+			RequestID:            requestID,
+			Method:               r.Method,
+			Host:                 r.Host,
+			Path:                 r.URL.Path,
+			RouteID:              routeID,
+			PoolKey:              poolKey,
+			UpstreamAddr:         upstreamAddr,
+			Status:               recorder.Status(),
+			Duration:             duration,
+			BytesIn:              bytesIn,
+			BytesOut:             recorder.BytesWritten(),
+			ErrorCategory:        errorCategory,
+			RetryCount:           retryCount,
+			RetryLastReason:      retryLastReason,
+			RetryBudgetExhausted: retryBudgetExhausted,
+			SnapshotVersion:      snapshotVersion,
+			SnapshotSource:       snapshotSource,
+			UserAgent:            r.UserAgent(),
+			RemoteAddr:           r.RemoteAddr,
 		})
 
 		if h != nil && h.Metrics != nil {
@@ -115,18 +122,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	poolKey = string(poolKeyValue)
 
-	obs.MarkPhase(r.Context(), "upstream_pick")
-
-	upstream, _ := h.Registry.Pick(poolKeyValue)
-	if upstream == "" {
-		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
-		return
-	}
-	upstreamAddr = upstream
-
 	ctx, cancel := context.WithTimeout(r.Context(), route.Policy.RequestTimeout)
 	defer cancel()
 
 	r = r.WithContext(ctx)
-	h.Engine.Forward(recorder, r, poolKeyValue, upstream, route.Policy, requestID)
+	obs.MarkPhase(r.Context(), "upstream_pick")
+	picker := func() (string, bool) {
+		return h.Registry.Pick(poolKeyValue)
+	}
+	forwardResult := h.Engine.ForwardWithRetry(recorder, r, poolKeyValue, picker, route.Policy, route.ID, requestID)
+	if forwardResult.UpstreamAddr != "" {
+		upstreamAddr = forwardResult.UpstreamAddr
+	}
+	retryCount = forwardResult.RetryCount
+	retryLastReason = forwardResult.RetryReason
+	retryBudgetExhausted = forwardResult.RetryBudgetExhausted
 }

@@ -53,8 +53,8 @@ func (s *Store) Swap(next *Snapshot) {
 }
 
 const (
-	defaultRequestTimeout               = 30 * time.Second
-	defaultUpstreamDialTimeout          = time.Second
+	defaultRequestTimeout                = 30 * time.Second
+	defaultUpstreamDialTimeout           = time.Second
 	defaultUpstreamResponseHeaderTimeout = 5 * time.Second
 	defaultHealthPath                    = "/healthz"
 	defaultHealthInterval                = 5 * time.Second
@@ -63,6 +63,13 @@ const (
 	defaultHealthyAfterSuccesses         = 2
 	defaultBaseEject                     = 10 * time.Second
 	defaultMaxEject                      = 5 * time.Minute
+	defaultRetryMaxAttempts              = 1
+	defaultRetryClientLRUSize            = 10000
+)
+
+var (
+	defaultRetryStatuses = []int{502, 503, 504}
+	defaultRetryErrors   = []string{"dial", "timeout"}
 )
 
 func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error) {
@@ -137,9 +144,31 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 		}
 
 		policyRuntime := policy.Policy{
-			RequestTimeout:               durationOrDefault(route.Policy.RequestTimeoutMS, defaultRequestTimeout),
-			UpstreamDialTimeout:          durationOrDefault(route.Policy.UpstreamDialTimeoutMS, defaultUpstreamDialTimeout),
+			RequestTimeout:                durationOrDefault(route.Policy.RequestTimeoutMS, defaultRequestTimeout),
+			UpstreamDialTimeout:           durationOrDefault(route.Policy.UpstreamDialTimeoutMS, defaultUpstreamDialTimeout),
 			UpstreamResponseHeaderTimeout: durationOrDefault(route.Policy.UpstreamResponseHeaderTimeoutMS, defaultUpstreamResponseHeaderTimeout),
+			Retry: policy.RetryPolicy{
+				Enabled:          route.Policy.Retry.Enabled,
+				MaxAttempts:      intOrDefault(route.Policy.Retry.MaxAttempts, defaultRetryMaxAttempts),
+				PerTryTimeout:    durationOrZero(route.Policy.Retry.PerTryTimeoutMS),
+				TotalRetryBudget: durationOrZero(route.Policy.Retry.TotalRetryBudgetMS),
+				RetryOnStatus:    retryStatusMap(route.Policy.Retry.RetryOnStatus),
+				RetryOnErrors:    retryErrorMap(route.Policy.Retry.RetryOnErrors),
+				Backoff:          durationOrZero(route.Policy.Retry.BackoffMS),
+				BackoffJitter:    durationOrZero(route.Policy.Retry.BackoffJitterMS),
+			},
+			RetryBudget: policy.RetryBudgetPolicy{
+				Enabled:            route.Policy.RetryBudget.Enabled,
+				PercentOfSuccesses: nonNegative(route.Policy.RetryBudget.PercentOfSuccesses),
+				Burst:              nonNegative(route.Policy.RetryBudget.Burst),
+			},
+			ClientRetryCap: policy.ClientRetryCapPolicy{
+				Enabled:            route.Policy.ClientRetryCap.Enabled,
+				Key:                route.Policy.ClientRetryCap.Key,
+				PercentOfSuccesses: nonNegative(route.Policy.ClientRetryCap.PercentOfSuccesses),
+				Burst:              nonNegative(route.Policy.ClientRetryCap.Burst),
+				LRUSize:            intOrDefault(route.Policy.ClientRetryCap.LRUSize, defaultRetryClientLRUSize),
+			},
 		}
 
 		routes = append(routes, policy.Route{
@@ -175,9 +204,23 @@ func durationOrDefault(ms int, fallback time.Duration) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+func durationOrZero(ms int) time.Duration {
+	if ms <= 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 func intOrDefault(value int, fallback int) int {
 	if value <= 0 {
 		return fallback
+	}
+	return value
+}
+
+func nonNegative(value int) int {
+	if value < 0 {
+		return 0
 	}
 	return value
 }
@@ -187,4 +230,32 @@ func stringOrDefault(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func retryStatusMap(values []int) map[int]bool {
+	if len(values) == 0 {
+		values = defaultRetryStatuses
+	}
+	result := make(map[int]bool, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		result[value] = true
+	}
+	return result
+}
+
+func retryErrorMap(values []string) map[string]bool {
+	if len(values) == 0 {
+		values = defaultRetryErrors
+	}
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		result[value] = true
+	}
+	return result
 }

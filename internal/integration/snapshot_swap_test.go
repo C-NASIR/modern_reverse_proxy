@@ -70,7 +70,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	}
 
 	store := runtime.NewStore(initialSnap)
-	engine := proxy.NewEngine(reg, nil)
+	engine := proxy.NewEngine(reg, nil, nil)
 	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: engine}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
