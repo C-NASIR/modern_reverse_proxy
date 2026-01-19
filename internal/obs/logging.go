@@ -24,6 +24,7 @@ type AccessLogEntry struct {
 	RetryCount           int    `json:"retry_count"`
 	RetryLastReason      string `json:"retry_last_reason"`
 	RetryBudgetExhausted bool   `json:"retry_budget_exhausted"`
+	CacheStatus          string `json:"cache_status"`
 	SnapshotVersion      string `json:"snapshot_version"`
 	UserAgent            string `json:"user_agent,omitempty"`
 	RemoteAddr           string `json:"remote_addr,omitempty"`
@@ -54,6 +55,7 @@ func LogAccess(ctx RequestContext) {
 		RetryCount:           ctx.RetryCount,
 		RetryLastReason:      defaultString(ctx.RetryLastReason, "none"),
 		RetryBudgetExhausted: ctx.RetryBudgetExhausted,
+		CacheStatus:          defaultString(ctx.CacheStatus, "bypass"),
 		SnapshotVersion:      defaultString(ctx.SnapshotVersion, "none"),
 		UserAgent:            ctx.UserAgent,
 		RemoteAddr:           ctx.RemoteAddr,

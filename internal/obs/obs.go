@@ -18,6 +18,7 @@ type RequestContext struct {
 	RetryCount           int
 	RetryLastReason      string
 	RetryBudgetExhausted bool
+	CacheStatus          string
 	SnapshotVersion      string
 	SnapshotSource       string
 	UserAgent            string

@@ -79,6 +79,10 @@ const (
 	defaultMaxEject                      = 5 * time.Minute
 	defaultRetryMaxAttempts              = 1
 	defaultRetryClientLRUSize            = 10000
+	defaultCacheMaxObjectBytes           = int64(1024 * 1024)
+	defaultCacheMinObjectBytes           = int64(1024)
+	defaultCacheMaxObjectBytesLimit      = int64(50 * 1024 * 1024)
+	defaultCacheVaryHeaderMaxLen         = 128
 	defaultBreakerFailureRateThreshold   = 50
 	defaultBreakerMinRequests            = 20
 	defaultBreakerEvalWindow             = 10 * time.Second
@@ -96,6 +100,7 @@ const (
 	defaultOutlierLatencyMinSamples      = 50
 	defaultOutlierLatencyMultiplier      = 3
 	defaultOutlierLatencyConsecutive     = 3
+	defaultCacheCoalesceTimeout          = 5 * time.Second
 	defaultTLSAddr                       = "127.0.0.1:8443"
 )
 
@@ -242,6 +247,12 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 			MTLSClientCA: route.Policy.MTLSClientCA,
 		}
 
+		cachePolicy, err := cachePolicyFromConfig(route.ID, route.Policy.Cache)
+		if err != nil {
+			return nil, err
+		}
+		policyRuntime.Cache = cachePolicy
+
 		stablePoolKey := fmt.Sprintf("%s::%s", route.ID, route.Pool)
 		if outlierReg != nil {
 			poolCfg := cfg.Pools[route.Pool]
@@ -358,11 +369,82 @@ func nonNegative(value int) int {
 	return value
 }
 
+func cachePolicyFromConfig(routeID string, cacheCfg config.CacheConfig) (policy.CachePolicy, error) {
+	maxObjectBytes := int64(cacheCfg.MaxObjectBytes)
+	if maxObjectBytes <= 0 {
+		maxObjectBytes = defaultCacheMaxObjectBytes
+	}
+	if maxObjectBytes < defaultCacheMinObjectBytes || maxObjectBytes > defaultCacheMaxObjectBytesLimit {
+		return policy.CachePolicy{}, fmt.Errorf("route %q cache max_object_bytes out of range", routeID)
+	}
+
+	varyHeaders, err := sanitizeVaryHeaders(routeID, cacheCfg.VaryHeaders)
+	if err != nil {
+		return policy.CachePolicy{}, err
+	}
+
+	coalesceEnabled := boolOrDefault(cacheCfg.CoalesceEnabled, true)
+	onlyIfContentLength := boolOrDefault(cacheCfg.OnlyIfContentLength, true)
+	coalesceTimeout := durationOrDefault(cacheCfg.CoalesceTimeoutMS, defaultCacheCoalesceTimeout)
+	ttl := durationOrZero(cacheCfg.TTLMS)
+	if cacheCfg.Enabled && ttl <= 0 {
+		return policy.CachePolicy{}, fmt.Errorf("route %q cache ttl_ms must be > 0", routeID)
+	}
+
+	return policy.CachePolicy{
+		Enabled:             cacheCfg.Enabled,
+		Public:              cacheCfg.Public,
+		TTL:                 ttl,
+		MaxObjectBytes:      maxObjectBytes,
+		VaryHeaders:         varyHeaders,
+		CoalesceEnabled:     coalesceEnabled,
+		CoalesceTimeout:     coalesceTimeout,
+		OnlyIfContentLength: onlyIfContentLength,
+	}, nil
+}
+
 func stringOrDefault(value string, fallback string) string {
 	if value == "" {
 		return fallback
 	}
 	return value
+}
+
+func sanitizeVaryHeaders(routeID string, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > defaultCacheVaryHeaderMaxLen {
+			return nil, fmt.Errorf("route %q cache vary header too long", routeID)
+		}
+		if !isASCII(trimmed) {
+			return nil, fmt.Errorf("route %q cache vary header must be ASCII", routeID)
+		}
+		result = append(result, trimmed)
+	}
+	return result, nil
+}
+
+func boolOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func isASCII(value string) bool {
+	for _, r := range value {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func retryStatusMap(values []int) map[int]bool {

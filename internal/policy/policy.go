@@ -11,6 +11,7 @@ type Policy struct {
 	ClientRetryCap                ClientRetryCapPolicy
 	RequireMTLS                   bool
 	MTLSClientCA                  string
+	Cache                         CachePolicy
 }
 
 type RetryPolicy struct {
@@ -36,6 +37,17 @@ type ClientRetryCapPolicy struct {
 	PercentOfSuccesses int
 	Burst              int
 	LRUSize            int
+}
+
+type CachePolicy struct {
+	Enabled             bool
+	Public              bool
+	TTL                 time.Duration
+	MaxObjectBytes      int64
+	VaryHeaders         []string
+	CoalesceEnabled     bool
+	CoalesceTimeout     time.Duration
+	OnlyIfContentLength bool
 }
 
 type Route struct {

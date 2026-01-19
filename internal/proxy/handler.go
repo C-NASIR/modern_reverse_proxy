@@ -2,12 +2,17 @@ package proxy
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"modern_reverse_proxy/internal/breaker"
+	"modern_reverse_proxy/internal/cache"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
+	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
@@ -21,6 +26,7 @@ type Handler struct {
 	OutlierRegistry *outlier.Registry
 	Engine          *Engine
 	Metrics         *obs.Metrics
+	Cache           *cache.Cache
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +55,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retryCount := 0
 	retryLastReason := ""
 	retryBudgetExhausted := false
+	cacheStatus := "bypass"
+	cacheMetricStatus := ""
 	breakerState := ""
 	breakerDenied := false
 	outlierIgnored := false
@@ -90,6 +98,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RetryCount:           retryCount,
 			RetryLastReason:      retryLastReason,
 			RetryBudgetExhausted: retryBudgetExhausted,
+			CacheStatus:          cacheStatus,
 			SnapshotVersion:      snapshotVersion,
 			SnapshotSource:       snapshotSource,
 			UserAgent:            r.UserAgent(),
@@ -174,6 +183,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		stablePoolKey = route.ID + "::" + route.PoolName
 	}
 
+	cachePolicy := route.Policy.Cache
+	cacheKey := ""
+	cacheEligible := isCacheEligible(r, cachePolicy, h.Cache)
+	if cacheEligible {
+		cacheKey = cache.BuildKey(r, cachePolicy)
+		if h.Cache != nil && h.Cache.Store != nil {
+			if entry, ok := h.Cache.Store.Get(cacheKey); ok {
+				cacheStatus = "hit"
+				cacheMetricStatus = "hit"
+				writeCachedResponse(recorder, entry, requestID, r.Method)
+				if h.Metrics != nil {
+					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+				}
+				return
+			}
+		}
+	}
+
 	poolConfig, ok := snap.PoolConfigs[route.PoolName]
 	if !ok {
 		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool config missing")
@@ -212,6 +239,103 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return h.OutlierRegistry.IsEjected(stablePoolKey, addr, now)
 		})
 	}
+	if cacheEligible {
+		cacheStatus = "miss"
+		coalesceFlight, isLeader, coalesceApplied := startCoalescing(h.Cache, cacheKey, cachePolicy)
+		if coalesceApplied && !isLeader {
+			entry, ok, err, completed := h.Cache.Coalescer.Wait(coalesceFlight, cachePolicy.CoalesceTimeout)
+			if completed && err == nil && ok {
+				cacheStatus = "coalesce_follower"
+				cacheMetricStatus = "miss"
+				writeCachedResponse(recorder, entry, requestID, r.Method)
+				if h.Metrics != nil {
+					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+				}
+				return
+			}
+			if !completed {
+				cacheStatus = "coalesce_breakaway"
+				if h.Metrics != nil {
+					h.Metrics.RecordCacheCoalesceBreakaway(routeID)
+				}
+			}
+		}
+
+		var coalesceEntry cache.Entry
+		coalesceResult := false
+		var coalesceErr error
+		if coalesceApplied && isLeader {
+			defer func() {
+				h.Cache.Coalescer.Finish(cacheKey, coalesceFlight, coalesceEntry, coalesceResult, coalesceErr)
+			}()
+		}
+
+		retryResult, forwardResult := h.Engine.roundTripWithRetry(r, poolKeyValue, stablePoolKey, picker, route.Policy, route.ID, poolConfig.Breaker)
+		if retryResult.Response == nil {
+			coalesceErr = retryResult.Err
+			if writeProxyErrorForResult(recorder, r, requestID, retryResult) {
+				return
+			}
+			WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
+			return
+		}
+
+		if forwardResult.UpstreamAddr != "" {
+			upstreamAddr = forwardResult.UpstreamAddr
+		}
+		retryCount = forwardResult.RetryCount
+		retryLastReason = forwardResult.RetryReason
+		retryBudgetExhausted = forwardResult.RetryBudgetExhausted
+		outlierIgnored = forwardResult.OutlierIgnored
+		endpointEjected = forwardResult.EndpointEjected
+
+		cacheable, contentLength := isCacheableResponse(retryResult.Response, cachePolicy)
+		if !cacheable {
+			cacheStatus = "not_cacheable"
+			cacheMetricStatus = "not_cacheable"
+			coalesceResult = false
+			WriteUpstreamResponse(recorder, retryResult.Response, requestID)
+			if h.Metrics != nil {
+				h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+			}
+			return
+		}
+
+		body, err := readUpstreamBody(retryResult.Response, contentLength)
+		if err != nil {
+			coalesceErr = err
+			WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
+			return
+		}
+
+		entry := cache.Entry{
+			Status:    retryResult.Response.StatusCode,
+			Header:    cloneHeader(retryResult.Response.Header),
+			Body:      body,
+			StoredAt:  time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(cachePolicy.TTL),
+		}
+		coalesceEntry = entry
+		coalesceResult = true
+		cacheMetricStatus = "miss"
+		if h.Cache != nil && h.Cache.Store != nil {
+			if err := h.Cache.Store.Set(cacheKey, entry); err != nil {
+				if cacheStatus != "coalesce_breakaway" {
+					cacheStatus = "store_failed"
+				}
+				if h.Metrics != nil {
+					h.Metrics.RecordCacheStoreFail(routeID)
+				}
+			}
+		}
+
+		writeCachedResponse(recorder, entry, requestID, r.Method)
+		if h.Metrics != nil {
+			h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+		}
+		return
+	}
+
 	forwardResult := h.Engine.ForwardWithRetry(recorder, r, poolKeyValue, stablePoolKey, picker, route.Policy, route.ID, poolConfig.Breaker, requestID)
 	if forwardResult.UpstreamAddr != "" {
 		upstreamAddr = forwardResult.UpstreamAddr
@@ -221,4 +345,129 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retryBudgetExhausted = forwardResult.RetryBudgetExhausted
 	outlierIgnored = forwardResult.OutlierIgnored
 	endpointEjected = forwardResult.EndpointEjected
+}
+
+func isCacheEligible(r *http.Request, cachePolicy policy.CachePolicy, cacheLayer *cache.Cache) bool {
+	if cacheLayer == nil || cacheLayer.Store == nil {
+		return false
+	}
+	if !cachePolicy.Enabled || cachePolicy.TTL <= 0 {
+		return false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	return !hasNoStoreHeader(r.Header)
+}
+
+func startCoalescing(cacheLayer *cache.Cache, key string, cachePolicy policy.CachePolicy) (*cache.Flight, bool, bool) {
+	if cacheLayer == nil || cacheLayer.Coalescer == nil {
+		return nil, false, false
+	}
+	if !cachePolicy.CoalesceEnabled || key == "" {
+		return nil, false, false
+	}
+	return cacheLayer.Coalescer.Start(key)
+}
+
+func hasNoStoreHeader(header http.Header) bool {
+	values := header.Values("Cache-Control")
+	for _, value := range values {
+		if hasNoStoreValue(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNoStoreValue(value string) bool {
+	parts := strings.Split(value, ",")
+	for _, part := range parts {
+		if strings.EqualFold(strings.TrimSpace(part), "no-store") {
+			return true
+		}
+	}
+	return false
+}
+
+func isCacheableResponse(resp *http.Response, cachePolicy policy.CachePolicy) (bool, int64) {
+	if resp == nil {
+		return false, 0
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, 0
+	}
+	if hasNoStoreHeader(resp.Header) {
+		return false, 0
+	}
+	if hasChunkedEncoding(resp) {
+		return false, 0
+	}
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+		return false, 0
+	}
+	contentLengthHeader := strings.TrimSpace(resp.Header.Get("Content-Length"))
+	if contentLengthHeader == "" {
+		return false, 0
+	}
+	contentLength, err := strconv.ParseInt(contentLengthHeader, 10, 64)
+	if err != nil || contentLength < 0 {
+		return false, 0
+	}
+	if cachePolicy.OnlyIfContentLength && contentLengthHeader == "" {
+		return false, 0
+	}
+	if contentLength > cachePolicy.MaxObjectBytes {
+		return false, 0
+	}
+	return true, contentLength
+}
+
+func hasChunkedEncoding(resp *http.Response) bool {
+	for _, encoding := range resp.TransferEncoding {
+		if strings.EqualFold(encoding, "chunked") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(resp.Header.Get("Transfer-Encoding")), "chunked")
+}
+
+func readUpstreamBody(resp *http.Response, contentLength int64) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
+	}
+	defer resp.Body.Close()
+	limit := contentLength + 1
+	if limit <= 0 {
+		limit = 1
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > contentLength {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return body, nil
+}
+
+func cloneHeader(header http.Header) http.Header {
+	result := make(http.Header, len(header))
+	for key, values := range header {
+		cloned := make([]string, len(values))
+		copy(cloned, values)
+		result[key] = cloned
+	}
+	return result
+}
+
+func writeCachedResponse(w http.ResponseWriter, entry cache.Entry, requestID string, method string) {
+	copyHeaders(w.Header(), entry.Header)
+	w.Header().Set(RequestIDHeader, requestID)
+	w.WriteHeader(entry.Status)
+	if method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(entry.Body)
 }

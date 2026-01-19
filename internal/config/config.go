@@ -36,6 +36,7 @@ type RoutePolicy struct {
 	ClientRetryCap                  ClientRetryCapConfig `json:"client_retry_cap"`
 	RequireMTLS                     bool                 `json:"require_mtls"`
 	MTLSClientCA                    string               `json:"mtls_client_ca"`
+	Cache                           CacheConfig          `json:"cache"`
 }
 
 type TLSConfig struct {
@@ -76,6 +77,17 @@ type ClientRetryCapConfig struct {
 	PercentOfSuccesses int    `json:"percent_of_successes"`
 	Burst              int    `json:"burst"`
 	LRUSize            int    `json:"lru_size"`
+}
+
+type CacheConfig struct {
+	Enabled             bool     `json:"enabled"`
+	Public              bool     `json:"public"`
+	TTLMS               int      `json:"ttl_ms"`
+	MaxObjectBytes      int      `json:"max_object_bytes"`
+	VaryHeaders         []string `json:"vary_headers"`
+	CoalesceEnabled     *bool    `json:"coalesce_enabled"`
+	CoalesceTimeoutMS   int      `json:"coalesce_timeout_ms"`
+	OnlyIfContentLength *bool    `json:"only_if_content_length"`
 }
 
 type HealthConfig struct {

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"modern_reverse_proxy/internal/breaker"
+	"modern_reverse_proxy/internal/cache"
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
@@ -41,6 +42,9 @@ func main() {
 	}
 
 	store := runtime.NewStore(snap)
+	cacheStore := cache.NewMemoryStore(cache.DefaultMaxObjectBytes)
+	cacheCoalescer := cache.NewCoalescer(cache.DefaultMaxFlights)
+	cacheLayer := cache.NewCache(cacheStore, cacheCoalescer)
 	handler := &proxy.Handler{
 		Store:           store,
 		Registry:        reg,
@@ -49,6 +53,7 @@ func main() {
 		OutlierRegistry: outlierReg,
 		Engine:          proxy.NewEngine(reg, retryReg, metrics, breakerReg, outlierReg),
 		Metrics:         metrics,
+		Cache:           cacheLayer,
 	}
 
 	mux := http.NewServeMux()

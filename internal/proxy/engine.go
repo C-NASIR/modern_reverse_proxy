@@ -46,18 +46,30 @@ type ForwardResult struct {
 }
 
 var errNoUpstream = errors.New("no upstream available")
+var errTransportUnavailable = errors.New("upstream transport unavailable")
 
 func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKey pool.PoolKey, stablePoolKey string, picker func() (pool.PickResult, bool), policy policy.Policy, routeID string, breakerCfg breaker.Config, requestID string) ForwardResult {
+	retryResult, result := e.roundTripWithRetry(r, poolKey, stablePoolKey, picker, policy, routeID, breakerCfg)
+	if retryResult.Response != nil {
+		WriteUpstreamResponse(w, retryResult.Response, requestID)
+		return result
+	}
+	if writeProxyErrorForResult(w, r, requestID, retryResult) {
+		return result
+	}
+	WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
+	return result
+}
+
+func (e *Engine) roundTripWithRetry(r *http.Request, poolKey pool.PoolKey, stablePoolKey string, picker func() (pool.PickResult, bool), policy policy.Policy, routeID string, breakerCfg breaker.Config) (retry.Result, ForwardResult) {
 	result := ForwardResult{}
 	if picker == nil {
-		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
-		return result
+		return retry.Result{Err: errNoUpstream}, result
 	}
 
 	transport, err := e.transportFor(policy)
 	if err != nil {
-		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream transport unavailable")
-		return result
+		return retry.Result{Err: errTransportUnavailable}, result
 	}
 
 	allowRetry := policy.Retry.Enabled && policy.Retry.MaxAttempts > 1
@@ -107,27 +119,8 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 			defer e.registry.InflightDone(poolKey, upstreamAddr)
 		}
 
-		target := &url.URL{
-			Scheme:   "http",
-			Host:     upstreamAddr,
-			Path:     r.URL.Path,
-			RawQuery: r.URL.RawQuery,
-		}
-
-		outbound, err := http.NewRequestWithContext(ctx, r.Method, target.String(), body)
-		if err != nil {
-			return nil, err, upstreamAddr
-		}
-
-		outbound.Header = r.Header.Clone()
-		outbound.Host = upstreamAddr
-		setForwardedHeaders(outbound, r)
-		obs.InjectTraceHeaders(outbound, r.Context())
-
-		obs.MarkPhase(r.Context(), "upstream_roundtrip_start")
 		roundtripStart := time.Now()
-		resp, err := transport.RoundTrip(outbound)
-		obs.MarkPhase(r.Context(), "upstream_roundtrip_end")
+		resp, err := roundTripUpstream(ctx, r, upstreamAddr, transport, body)
 		if upstreamAddr != "" {
 			requestLatency := time.Since(roundtripStart)
 			success := err == nil && resp != nil && resp.StatusCode < http.StatusInternalServerError
@@ -195,7 +188,6 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 	}
 
 	if retryResult.Response != nil {
-		defer retryResult.Response.Body.Close()
 		e.passiveSuccess(poolKey, retryResult.UpstreamAddr)
 		if retryResult.Response.StatusCode >= http.StatusOK && retryResult.Response.StatusCode < http.StatusBadRequest {
 			if routeBudget != nil {
@@ -205,35 +197,87 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 				clientBudget.RecordSuccess()
 			}
 		}
-
-		copyHeaders(w.Header(), retryResult.Response.Header)
-		w.Header().Set(RequestIDHeader, requestID)
-		w.WriteHeader(retryResult.Response.StatusCode)
-		_, _ = io.Copy(w, retryResult.Response.Body)
-		return result
 	}
 
+	return retryResult, result
+}
+
+func writeProxyErrorForResult(w http.ResponseWriter, r *http.Request, requestID string, retryResult retry.Result) bool {
+	if errors.Is(retryResult.Err, errTransportUnavailable) {
+		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream transport unavailable")
+		return true
+	}
 	if errors.Is(retryResult.Err, errNoUpstream) {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
-		return result
+		return true
 	}
 	if isRequestTimeout(r.Context()) {
 		WriteProxyError(w, requestID, http.StatusGatewayTimeout, "request_timeout", "request timed out")
-		return result
+		return true
 	}
 	if isClientCanceled(r.Context()) {
-		return result
+		return true
 	}
 	if retryResult.Err != nil && (isTimeoutError(retryResult.Err) || errors.Is(retryResult.Err, context.DeadlineExceeded)) {
 		WriteProxyError(w, requestID, http.StatusGatewayTimeout, "upstream_timeout", "upstream timeout")
-		return result
+		return true
 	}
 	if retryResult.Err != nil && isDialError(retryResult.Err) {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "upstream_connect_failed", "upstream connect failed")
-		return result
+		return true
 	}
-	WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
-	return result
+	return false
+}
+
+func (e *Engine) RoundTripUpstream(ctx context.Context, req *http.Request, upstreamAddr string, policy policy.Policy) (*http.Response, error) {
+	transport, err := e.transportFor(policy)
+	if err != nil {
+		return nil, err
+	}
+	body := req.Body
+	if req.Body != nil && req.ContentLength == 0 {
+		body = http.NoBody
+	}
+	return roundTripUpstream(ctx, req, upstreamAddr, transport, body)
+}
+
+func roundTripUpstream(ctx context.Context, req *http.Request, upstreamAddr string, transport *http.Transport, body io.ReadCloser) (*http.Response, error) {
+	target := &url.URL{
+		Scheme:   "http",
+		Host:     upstreamAddr,
+		Path:     req.URL.Path,
+		RawQuery: req.URL.RawQuery,
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	outbound, err := http.NewRequestWithContext(ctx, req.Method, target.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	outbound.Header = req.Header.Clone()
+	outbound.Host = upstreamAddr
+	setForwardedHeaders(outbound, req)
+	obs.InjectTraceHeaders(outbound, req.Context())
+
+	obs.MarkPhase(req.Context(), "upstream_roundtrip_start")
+	resp, err := transport.RoundTrip(outbound)
+	obs.MarkPhase(req.Context(), "upstream_roundtrip_end")
+	return resp, err
+}
+
+func WriteUpstreamResponse(w http.ResponseWriter, resp *http.Response, requestID string) {
+	if resp == nil {
+		return
+	}
+	defer resp.Body.Close()
+	copyHeaders(w.Header(), resp.Header)
+	w.Header().Set(RequestIDHeader, requestID)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func setForwardedHeaders(outbound *http.Request, inbound *http.Request) {
