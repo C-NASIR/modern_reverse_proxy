@@ -11,6 +11,7 @@ import (
 
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/proxy"
+	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
 )
@@ -62,14 +63,15 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	initialSnap, err := runtime.BuildSnapshot(cfg)
+	reg := registry.NewRegistry(0, 0)
+	initialSnap, err := runtime.BuildSnapshot(cfg, reg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(initialSnap)
-	engine := proxy.NewEngine()
-	proxyHandler := &proxy.Handler{Store: store, Engine: engine}
+	engine := proxy.NewEngine(reg)
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: engine}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 
@@ -105,7 +107,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse next config: %v", err)
 	}
-	nextSnap, err := runtime.BuildSnapshot(nextCfg)
+	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg)
 	if err != nil {
 		t.Fatalf("build next snapshot: %v", err)
 	}

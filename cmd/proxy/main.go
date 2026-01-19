@@ -7,6 +7,7 @@ import (
 
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/proxy"
+	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 )
 
@@ -22,15 +23,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse config: %v", err)
 	}
-	snap, err := runtime.BuildSnapshot(cfg)
+	reg := registry.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(cfg, reg)
 	if err != nil {
 		log.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
 	handler := &proxy.Handler{
-		Store:  store,
-		Engine: proxy.NewEngine(),
+		Store:    store,
+		Registry: reg,
+		Engine:   proxy.NewEngine(reg),
 	}
 
 	listenAddr := cfg.ListenAddr

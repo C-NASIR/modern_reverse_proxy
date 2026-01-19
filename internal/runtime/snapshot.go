@@ -8,34 +8,16 @@ import (
 	"time"
 
 	"modern_reverse_proxy/internal/config"
+	"modern_reverse_proxy/internal/health"
 	"modern_reverse_proxy/internal/policy"
+	"modern_reverse_proxy/internal/pool"
+	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/router"
 )
 
-type Pool interface {
-	Pick() string
-}
-
-type PoolRuntime struct {
-	endpoints []string
-	rr        uint64
-}
-
-func NewPoolRuntime(endpoints []string) *PoolRuntime {
-	return &PoolRuntime{endpoints: append([]string(nil), endpoints...)}
-}
-
-func (p *PoolRuntime) Pick() string {
-	if p == nil || len(p.endpoints) == 0 {
-		return ""
-	}
-	idx := atomic.AddUint64(&p.rr, 1) - 1
-	return p.endpoints[idx%uint64(len(p.endpoints))]
-}
-
 type Snapshot struct {
 	Router *router.Router
-	Pools  map[string]Pool
+	Pools  map[string]pool.PoolKey
 }
 
 type Store struct {
@@ -70,19 +52,42 @@ const (
 	defaultRequestTimeout               = 30 * time.Second
 	defaultUpstreamDialTimeout          = time.Second
 	defaultUpstreamResponseHeaderTimeout = 5 * time.Second
+	defaultHealthPath                    = "/healthz"
+	defaultHealthInterval                = 5 * time.Second
+	defaultHealthTimeout                 = time.Second
+	defaultUnhealthyAfterFailures        = 3
+	defaultHealthyAfterSuccesses         = 2
+	defaultBaseEject                     = 10 * time.Second
+	defaultMaxEject                      = 5 * time.Minute
 )
 
-func BuildSnapshot(cfg *config.Config) (*Snapshot, error) {
+func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil")
 	}
+	if reg == nil {
+		return nil, errors.New("registry is nil")
+	}
 
-	pools := make(map[string]Pool, len(cfg.Pools))
-	for name, pool := range cfg.Pools {
-		if len(pool.Endpoints) == 0 {
+	pools := make(map[string]pool.PoolKey, len(cfg.Pools))
+	for name, poolCfg := range cfg.Pools {
+		if len(poolCfg.Endpoints) == 0 {
 			return nil, fmt.Errorf("pool %q has no endpoints", name)
 		}
-		pools[name] = NewPoolRuntime(pool.Endpoints)
+		poolKey := pool.PoolKey(name)
+		pools[name] = poolKey
+
+		healthCfg := health.Config{
+			Path:                   stringOrDefault(poolCfg.Health.Path, defaultHealthPath),
+			Interval:               durationOrDefault(poolCfg.Health.IntervalMS, defaultHealthInterval),
+			Timeout:                durationOrDefault(poolCfg.Health.TimeoutMS, defaultHealthTimeout),
+			UnhealthyAfterFailures: intOrDefault(poolCfg.Health.UnhealthyAfterFailures, defaultUnhealthyAfterFailures),
+			HealthyAfterSuccesses:  intOrDefault(poolCfg.Health.HealthyAfterSuccesses, defaultHealthyAfterSuccesses),
+			BaseEjectDuration:      durationOrDefault(poolCfg.Health.BaseEjectMS, defaultBaseEject),
+			MaxEjectDuration:       durationOrDefault(poolCfg.Health.MaxEjectMS, defaultMaxEject),
+		}
+
+		reg.Reconcile(poolKey, poolCfg.Endpoints, healthCfg)
 	}
 
 	seenIDs := make(map[string]struct{}, len(cfg.Routes))
@@ -146,4 +151,18 @@ func durationOrDefault(ms int, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func intOrDefault(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func stringOrDefault(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

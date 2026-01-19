@@ -10,6 +10,7 @@ import (
 
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/proxy"
+	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 	"modern_reverse_proxy/internal/testutil"
 )
@@ -51,13 +52,14 @@ func TestRouterPolicyRouting(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg)
+	reg := registry.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(cfg, reg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Engine: proxy.NewEngine()}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 
@@ -114,13 +116,14 @@ func TestRequestTimeoutReturnsGatewayTimeout(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg)
+	reg := registry.NewRegistry(0, 0)
+	snap, err := runtime.BuildSnapshot(cfg, reg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Engine: proxy.NewEngine()}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 

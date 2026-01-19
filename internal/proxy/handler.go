@@ -5,16 +5,18 @@ import (
 	"net/http"
 	"time"
 
+	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 )
 
 type Handler struct {
-	Store  *runtime.Store
-	Engine *Engine
+	Store    *runtime.Store
+	Registry *registry.Registry
+	Engine   *Engine
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h == nil || h.Store == nil || h.Engine == nil {
+	if h == nil || h.Store == nil || h.Engine == nil || h.Registry == nil {
 		WriteProxyError(w, "", http.StatusServiceUnavailable, "bad_gateway", "proxy not ready")
 		return
 	}
@@ -43,13 +45,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pool := snap.Pools[route.PoolName]
-	if pool == nil {
+	poolKey, ok := snap.Pools[route.PoolName]
+	if !ok || poolKey == "" {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "pool not found")
 		return
 	}
 
-	upstream := pool.Pick()
+	upstream, _ := h.Registry.Pick(poolKey)
 	if upstream == "" {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
 		return
@@ -59,5 +61,5 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	r = r.WithContext(ctx)
-	h.Engine.Forward(w, r, upstream, route.Policy, requestID)
+	h.Engine.Forward(w, r, poolKey, upstream, route.Policy, requestID)
 }

@@ -12,18 +12,21 @@ import (
 	"time"
 
 	"modern_reverse_proxy/internal/policy"
+	"modern_reverse_proxy/internal/pool"
+	"modern_reverse_proxy/internal/registry"
 )
 
 type Engine struct {
 	mu         sync.Mutex
 	transports map[string]*http.Transport
+	registry   *registry.Registry
 }
 
-func NewEngine() *Engine {
-	return &Engine{transports: make(map[string]*http.Transport)}
+func NewEngine(reg *registry.Registry) *Engine {
+	return &Engine{transports: make(map[string]*http.Transport), registry: reg}
 }
 
-func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr string, policy policy.Policy, requestID string) {
+func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, poolKey pool.PoolKey, upstreamAddr string, policy policy.Policy, requestID string) {
 	if upstreamAddr == "" {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
 		return
@@ -33,6 +36,11 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr st
 	if err != nil {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream transport unavailable")
 		return
+	}
+
+	if e.registry != nil {
+		e.registry.InflightStart(poolKey, upstreamAddr)
+		defer e.registry.InflightDone(poolKey, upstreamAddr)
 	}
 
 	target := &url.URL{
@@ -58,11 +66,16 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr st
 			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "request_timeout", "request timed out")
 			return
 		}
+		if isClientCanceled(r.Context()) {
+			return
+		}
 		if isTimeoutError(err) {
+			e.passiveFailure(poolKey, upstreamAddr)
 			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "upstream_timeout", "upstream timeout")
 			return
 		}
 		if isDialError(err) {
+			e.passiveFailure(poolKey, upstreamAddr)
 			WriteProxyError(w, requestID, http.StatusBadGateway, "upstream_connect_failed", "upstream connect failed")
 			return
 		}
@@ -70,6 +83,7 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr st
 		return
 	}
 	defer resp.Body.Close()
+	e.passiveSuccess(poolKey, upstreamAddr)
 
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Set(RequestIDHeader, requestID)
@@ -139,6 +153,10 @@ func isRequestTimeout(ctx context.Context) bool {
 	return errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
+func isClientCanceled(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
+}
+
 func isTimeoutError(err error) bool {
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -153,4 +171,18 @@ func isDialError(err error) bool {
 		return opErr.Op == "dial"
 	}
 	return false
+}
+
+func (e *Engine) passiveFailure(poolKey pool.PoolKey, addr string) {
+	if e.registry == nil {
+		return
+	}
+	e.registry.PassiveFailure(poolKey, addr)
+}
+
+func (e *Engine) passiveSuccess(poolKey pool.PoolKey, addr string) {
+	if e.registry == nil {
+		return
+	}
+	e.registry.PassiveSuccess(poolKey, addr)
 }
