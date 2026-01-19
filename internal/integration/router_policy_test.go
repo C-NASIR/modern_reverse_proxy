@@ -53,13 +53,13 @@ func TestRouterPolicyRouting(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(cfg, reg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 
@@ -117,13 +117,13 @@ func TestRequestTimeoutReturnsGatewayTimeout(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(cfg, reg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 

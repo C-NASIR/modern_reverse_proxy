@@ -61,13 +61,13 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 		},
 	}
 
-	snap1, err := runtime.BuildSnapshot(cfg1, reg)
+	snap1, err := runtime.BuildSnapshot(cfg1, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap1)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 
@@ -88,7 +88,7 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 		},
 	}
 
-	snap2, err := runtime.BuildSnapshot(cfg2, reg)
+	snap2, err := runtime.BuildSnapshot(cfg2, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}

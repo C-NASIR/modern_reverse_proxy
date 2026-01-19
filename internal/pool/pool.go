@@ -31,6 +31,14 @@ type PoolRuntime struct {
 	drainTimeout time.Duration
 }
 
+type PickResult struct {
+	Addr             string
+	SelectedHealthy  bool
+	SelectedFailOpen bool
+	OutlierIgnored   bool
+	EndpointEjected  bool
+}
+
 func NewPoolRuntime(key PoolKey, cfg health.Config, drainTimeout time.Duration) *PoolRuntime {
 	return &PoolRuntime{
 		key:          key,
@@ -67,11 +75,11 @@ func (p *PoolRuntime) Reconcile(endpoints []string, cfg health.Config, drainTime
 	}
 }
 
-func (p *PoolRuntime) Pick() (string, bool) {
+func (p *PoolRuntime) Pick(outlierEjected func(addr string, now time.Time) bool) PickResult {
 	p.mu.RLock()
 	if len(p.endpoints) == 0 {
 		p.mu.RUnlock()
-		return "", false
+		return PickResult{}
 	}
 
 	all := make([]*EndpointRuntime, 0, len(p.endpoints))
@@ -90,30 +98,62 @@ func (p *PoolRuntime) Pick() (string, bool) {
 	now := time.Now()
 	eligible := make([]*EndpointRuntime, 0, len(all))
 	nonDraining := make([]*EndpointRuntime, 0, len(all))
+	outlierSuppressed := false
 
 	for _, endpoint := range all {
+		isOutlierEjected := false
+		if outlierEjected != nil {
+			isOutlierEjected = outlierEjected(endpoint.addr, now)
+		}
 		if !endpoint.IsDraining() {
 			nonDraining = append(nonDraining, endpoint)
 		}
-		if endpoint.IsHealthy() && !endpoint.IsDraining() && !endpoint.IsEjected(now) {
+		isHealthy := endpoint.IsHealthy() && !endpoint.IsEjected(now)
+		if endpoint.IsHealthy() && !endpoint.IsDraining() && !endpoint.IsEjected(now) && !isOutlierEjected {
 			eligible = append(eligible, endpoint)
+		} else if isHealthy && !endpoint.IsDraining() && isOutlierEjected {
+			outlierSuppressed = true
 		}
 	}
 
 	if len(eligible) > 0 {
-		return p.pickFrom(eligible), false
+		picked := p.pickFrom(eligible)
+		return PickResult{
+			Addr:            picked.addr,
+			SelectedHealthy: true,
+		}
 	}
 	if len(nonDraining) > 0 {
-		return p.pickFrom(nonDraining), true
+		picked := p.pickFrom(nonDraining)
+		endpointEjected := !picked.IsHealthy() || picked.IsEjected(now)
+		if outlierEjected != nil {
+			endpointEjected = endpointEjected || outlierEjected(picked.addr, now)
+		}
+		return PickResult{
+			Addr:             picked.addr,
+			SelectedFailOpen: true,
+			OutlierIgnored:   outlierSuppressed,
+			EndpointEjected:  endpointEjected,
+		}
 	}
-	return p.pickFrom(all), true
+	picked := p.pickFrom(all)
+	endpointEjected := !picked.IsHealthy() || picked.IsEjected(now)
+	if outlierEjected != nil {
+		endpointEjected = endpointEjected || outlierEjected(picked.addr, now)
+	}
+	return PickResult{
+		Addr:             picked.addr,
+		SelectedFailOpen: true,
+		OutlierIgnored:   outlierSuppressed,
+		EndpointEjected:  endpointEjected,
+	}
 }
 
-func (p *PoolRuntime) pickFrom(endpoints []*EndpointRuntime) string {
+func (p *PoolRuntime) pickFrom(endpoints []*EndpointRuntime) *EndpointRuntime {
 	idx := atomic.AddUint64(&p.rr, 1) - 1
 	endpoint := endpoints[idx%uint64(len(endpoints))]
 	endpoint.MarkSeen()
-	return endpoint.addr
+	return endpoint
 }
 
 func (p *PoolRuntime) Endpoint(addr string) *EndpointRuntime {

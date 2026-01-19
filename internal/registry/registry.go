@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	defaultReapInterval  = 50 * time.Millisecond
-	defaultDrainTimeout  = 200 * time.Millisecond
+	defaultReapInterval = 50 * time.Millisecond
+	defaultDrainTimeout = 200 * time.Millisecond
 )
 
 type Registry struct {
@@ -51,12 +51,12 @@ func (r *Registry) Reconcile(key pool.PoolKey, endpoints []string, cfg health.Co
 	poolRuntime.Reconcile(endpoints, cfg, r.drainTimeout)
 }
 
-func (r *Registry) Pick(key pool.PoolKey) (string, bool) {
+func (r *Registry) Pick(key pool.PoolKey, outlierEjected func(addr string, now time.Time) bool) (pool.PickResult, bool) {
 	poolRuntime := r.getPool(key)
 	if poolRuntime == nil {
-		return "", false
+		return pool.PickResult{}, false
 	}
-	return poolRuntime.Pick()
+	return poolRuntime.Pick(outlierEjected), true
 }
 
 func (r *Registry) InflightStart(key pool.PoolKey, addr string) {

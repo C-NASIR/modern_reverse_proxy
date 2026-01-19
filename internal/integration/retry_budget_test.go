@@ -66,7 +66,7 @@ func TestRetryBudgetExhaustion(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRetryBudgetExhaustion(t *testing.T) {
 		Store:         store,
 		Registry:      reg,
 		RetryRegistry: retryReg,
-		Engine:        proxy.NewEngine(reg, retryReg, metrics),
+		Engine:        proxy.NewEngine(reg, retryReg, metrics, nil, nil),
 		Metrics:       metrics,
 	}
 

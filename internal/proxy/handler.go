@@ -5,17 +5,22 @@ import (
 	"net/http"
 	"time"
 
+	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/obs"
+	"modern_reverse_proxy/internal/outlier"
+	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
 )
 
 type Handler struct {
-	Store         *runtime.Store
-	Registry      *registry.Registry
-	RetryRegistry *registry.RetryRegistry
-	Engine        *Engine
-	Metrics       *obs.Metrics
+	Store           *runtime.Store
+	Registry        *registry.Registry
+	RetryRegistry   *registry.RetryRegistry
+	BreakerRegistry *breaker.Registry
+	OutlierRegistry *outlier.Registry
+	Engine          *Engine
+	Metrics         *obs.Metrics
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +49,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retryCount := 0
 	retryLastReason := ""
 	retryBudgetExhausted := false
+	breakerState := ""
+	breakerDenied := false
+	outlierIgnored := false
+	endpointEjected := false
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
 	}
@@ -82,6 +91,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			SnapshotSource:       snapshotSource,
 			UserAgent:            r.UserAgent(),
 			RemoteAddr:           r.RemoteAddr,
+			BreakerState:         breakerState,
+			BreakerDenied:        breakerDenied,
+			OutlierIgnored:       outlierIgnored,
+			EndpointEjected:      endpointEjected,
 		})
 
 		if h != nil && h.Metrics != nil {
@@ -122,19 +135,56 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	poolKey = string(poolKeyValue)
 
+	stablePoolKey := route.StablePoolKey
+	if stablePoolKey == "" {
+		stablePoolKey = route.ID + "::" + route.PoolName
+	}
+
+	poolConfig, ok := snap.PoolConfigs[route.PoolName]
+	if !ok {
+		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool config missing")
+		return
+	}
+
+	if h.BreakerRegistry != nil {
+		state, allowed, err := h.BreakerRegistry.Allow(stablePoolKey, poolConfig.Breaker)
+		breakerState = state.String()
+		if err != nil {
+			breakerState = "error"
+		} else if h.Metrics != nil {
+			h.Metrics.SetBreakerOpen(stablePoolKey, state == breaker.StateOpen)
+		}
+		if !allowed {
+			breakerDenied = true
+			if h.Metrics != nil {
+				h.Metrics.RecordCircuitOpen(stablePoolKey)
+				h.Metrics.SetBreakerOpen(stablePoolKey, true)
+			}
+			WriteProxyError(recorder, requestID, http.StatusServiceUnavailable, "circuit_open", "circuit open")
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), route.Policy.RequestTimeout)
 	defer cancel()
 
 	r = r.WithContext(ctx)
 	obs.MarkPhase(r.Context(), "upstream_pick")
-	picker := func() (string, bool) {
-		return h.Registry.Pick(poolKeyValue)
+	picker := func() (pool.PickResult, bool) {
+		return h.Registry.Pick(poolKeyValue, func(addr string, now time.Time) bool {
+			if h.OutlierRegistry == nil {
+				return false
+			}
+			return h.OutlierRegistry.IsEjected(stablePoolKey, addr, now)
+		})
 	}
-	forwardResult := h.Engine.ForwardWithRetry(recorder, r, poolKeyValue, picker, route.Policy, route.ID, requestID)
+	forwardResult := h.Engine.ForwardWithRetry(recorder, r, poolKeyValue, stablePoolKey, picker, route.Policy, route.ID, poolConfig.Breaker, requestID)
 	if forwardResult.UpstreamAddr != "" {
 		upstreamAddr = forwardResult.UpstreamAddr
 	}
 	retryCount = forwardResult.RetryCount
 	retryLastReason = forwardResult.RetryReason
 	retryBudgetExhausted = forwardResult.RetryBudgetExhausted
+	outlierIgnored = forwardResult.OutlierIgnored
+	endpointEjected = forwardResult.EndpointEjected
 }

@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"os"
 
+	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/obs"
+	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/proxy"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
@@ -28,19 +30,23 @@ func main() {
 	retryReg := registry.NewRetryRegistry(0, 0)
 	metrics := obs.NewMetrics(obs.MetricsConfig{})
 	obs.SetDefaultMetrics(metrics)
+	breakerReg := breaker.NewRegistry(0, 0)
+	outlierReg := outlier.NewRegistry(0, 0, metrics.RecordOutlierEjection)
 
-	snap, err := runtime.BuildSnapshot(cfg, reg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg)
 	if err != nil {
 		log.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
 	handler := &proxy.Handler{
-		Store:         store,
-		Registry:      reg,
-		RetryRegistry: retryReg,
-		Engine:        proxy.NewEngine(reg, retryReg, metrics),
-		Metrics:       metrics,
+		Store:           store,
+		Registry:        reg,
+		RetryRegistry:   retryReg,
+		BreakerRegistry: breakerReg,
+		OutlierRegistry: outlierReg,
+		Engine:          proxy.NewEngine(reg, retryReg, metrics, breakerReg, outlierReg),
+		Metrics:         metrics,
 	}
 
 	mux := http.NewServeMux()

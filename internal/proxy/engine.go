@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/obs"
+	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -24,10 +26,12 @@ type Engine struct {
 	registry   *registry.Registry
 	retryReg   *registry.RetryRegistry
 	metrics    *obs.Metrics
+	breakerReg *breaker.Registry
+	outlierReg *outlier.Registry
 }
 
-func NewEngine(reg *registry.Registry, retryReg *registry.RetryRegistry, metrics *obs.Metrics) *Engine {
-	return &Engine{transports: make(map[string]*http.Transport), registry: reg, retryReg: retryReg, metrics: metrics}
+func NewEngine(reg *registry.Registry, retryReg *registry.RetryRegistry, metrics *obs.Metrics, breakerReg *breaker.Registry, outlierReg *outlier.Registry) *Engine {
+	return &Engine{transports: make(map[string]*http.Transport), registry: reg, retryReg: retryReg, metrics: metrics, breakerReg: breakerReg, outlierReg: outlierReg}
 }
 
 type ForwardResult struct {
@@ -35,11 +39,15 @@ type ForwardResult struct {
 	RetryReason          string
 	RetryBudgetExhausted bool
 	UpstreamAddr         string
+	SelectedHealthy      bool
+	SelectedFailOpen     bool
+	OutlierIgnored       bool
+	EndpointEjected      bool
 }
 
 var errNoUpstream = errors.New("no upstream available")
 
-func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKey pool.PoolKey, picker func() (string, bool), policy policy.Policy, routeID string, requestID string) ForwardResult {
+func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKey pool.PoolKey, stablePoolKey string, picker func() (pool.PickResult, bool), policy policy.Policy, routeID string, breakerCfg breaker.Config, requestID string) ForwardResult {
 	result := ForwardResult{}
 	if picker == nil {
 		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
@@ -80,11 +88,19 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 		body = http.NoBody
 	}
 
+	var lastPick pool.PickResult
 	attempt := func(ctx context.Context) (*http.Response, error, string) {
-		upstreamAddr, _ := picker()
-		if upstreamAddr == "" {
+		pickResult, ok := picker()
+		if !ok || pickResult.Addr == "" {
+			lastPick = pool.PickResult{}
 			return nil, errNoUpstream, ""
 		}
+		lastPick = pickResult
+		if pickResult.OutlierIgnored && e.metrics != nil {
+			e.metrics.RecordOutlierFailOpen(stablePoolKey)
+		}
+
+		upstreamAddr := pickResult.Addr
 
 		if e.registry != nil {
 			e.registry.InflightStart(poolKey, upstreamAddr)
@@ -112,6 +128,19 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 		roundtripStart := time.Now()
 		resp, err := transport.RoundTrip(outbound)
 		obs.MarkPhase(r.Context(), "upstream_roundtrip_end")
+		if upstreamAddr != "" {
+			requestLatency := time.Since(roundtripStart)
+			success := err == nil && resp != nil && resp.StatusCode < http.StatusInternalServerError
+			reportable := err == nil || (!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded))
+			if reportable {
+				if e.outlierReg != nil {
+					e.outlierReg.RecordResult(stablePoolKey, upstreamAddr, success, requestLatency)
+				}
+				if e.breakerReg != nil && !errors.Is(err, errNoUpstream) {
+					e.breakerReg.Report(stablePoolKey, breakerCfg, success)
+				}
+			}
+		}
 		if e.metrics != nil {
 			e.metrics.ObserveUpstreamRoundTrip(string(poolKey), time.Since(roundtripStart))
 		}
@@ -156,6 +185,10 @@ func (e *Engine) ForwardWithRetry(w http.ResponseWriter, r *http.Request, poolKe
 	result.RetryReason = retryResult.RetryReason
 	result.RetryBudgetExhausted = retryResult.RetryBudgetExhausted
 	result.UpstreamAddr = retryResult.UpstreamAddr
+	result.SelectedHealthy = lastPick.SelectedHealthy
+	result.SelectedFailOpen = lastPick.SelectedFailOpen
+	result.OutlierIgnored = lastPick.OutlierIgnored
+	result.EndpointEjected = lastPick.EndpointEjected
 
 	if retryResult.RetryBudgetExhausted && e.metrics != nil {
 		e.metrics.RecordRetryBudgetExhausted(routeID)

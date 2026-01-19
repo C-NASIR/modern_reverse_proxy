@@ -20,8 +20,10 @@ type Route struct {
 }
 
 type Pool struct {
-	Endpoints []string     `json:"endpoints"`
-	Health    HealthConfig `json:"health"`
+	Endpoints []string      `json:"endpoints"`
+	Health    HealthConfig  `json:"health"`
+	Breaker   BreakerConfig `json:"breaker"`
+	Outlier   OutlierConfig `json:"outlier"`
 }
 
 type RoutePolicy struct {
@@ -66,6 +68,32 @@ type HealthConfig struct {
 	HealthyAfterSuccesses  int    `json:"healthy_after_successes"`
 	BaseEjectMS            int    `json:"base_eject_ms"`
 	MaxEjectMS             int    `json:"max_eject_ms"`
+}
+
+type BreakerConfig struct {
+	Enabled                     bool `json:"enabled"`
+	FailureRateThresholdPercent int  `json:"failure_rate_threshold_percent"`
+	MinimumRequests             int  `json:"minimum_requests"`
+	EvaluationWindowMS          int  `json:"evaluation_window_ms"`
+	OpenMS                      int  `json:"open_ms"`
+	HalfOpenMaxProbes           int  `json:"half_open_max_probes"`
+}
+
+type OutlierConfig struct {
+	Enabled                     bool `json:"enabled"`
+	ConsecutiveFailures         int  `json:"consecutive_failures"`
+	ErrorRateThreshold          int  `json:"error_rate_threshold_percent"`
+	ErrorRateWindowMS           int  `json:"error_rate_window_ms"`
+	MinRequests                 int  `json:"min_requests"`
+	BaseEjectMS                 int  `json:"base_eject_ms"`
+	MaxEjectMS                  int  `json:"max_eject_ms"`
+	MaxEjectPercent             int  `json:"max_eject_percent"`
+	LatencyEnabled              bool `json:"latency_enabled"`
+	LatencyWindowSize           int  `json:"latency_window_size"`
+	LatencyEvalIntervalMS       int  `json:"latency_eval_interval_ms"`
+	LatencyMinSamples           int  `json:"latency_min_samples"`
+	LatencyMultiplier           int  `json:"latency_multiplier"`
+	LatencyConsecutiveIntervals int  `json:"latency_consecutive_intervals"`
 }
 
 func ParseJSON(data []byte) (*Config, error) {

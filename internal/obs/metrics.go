@@ -25,9 +25,13 @@ type Metrics struct {
 	retries              *prometheus.CounterVec
 	retryBudgetExhausted *prometheus.CounterVec
 	configApply          *prometheus.CounterVec
+	circuitOpen          *prometheus.CounterVec
+	outlierEjections     *prometheus.CounterVec
+	outlierFailOpen      *prometheus.CounterVec
 	requestDuration      *prometheus.HistogramVec
 	upstreamRoundTrip    *prometheus.HistogramVec
 	snapshotInfo         *prometheus.GaugeVec
+	breakerOpen          *prometheus.GaugeVec
 	mu                   sync.Mutex
 	lastVersion          string
 	lastSource           string
@@ -84,6 +88,21 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Total config apply attempts",
 	}, []string{"result"})
 
+	circuitOpen := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_circuit_open_total",
+		Help: "Total circuit breaker open rejections",
+	}, []string{"pool"})
+
+	outlierEjections := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_outlier_ejections_total",
+		Help: "Total outlier ejections",
+	}, []string{"pool", "reason"})
+
+	outlierFailOpen := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_outlier_fail_open_total",
+		Help: "Total outlier fail-open events",
+	}, []string{"pool"})
+
 	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_request_duration_seconds",
 		Help:    "Proxy request duration",
@@ -96,12 +115,17 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Buckets: prometheus.DefBuckets,
 	}, []string{"pool"})
 
+	breakerOpen := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "proxy_breaker_open",
+		Help: "Breaker open state",
+	}, []string{"pool"})
+
 	snapshotInfoGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "proxy_active_snapshot_info",
 		Help: "Active snapshot metadata",
 	}, []string{"version", "source"})
 
-	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, requestDuration, upstreamRoundTrip, snapshotInfoGauge)
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
 
 	return &Metrics{
 		registry:             registry,
@@ -112,9 +136,13 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		retries:              retries,
 		retryBudgetExhausted: retryBudgetExhausted,
 		configApply:          configApply,
+		circuitOpen:          circuitOpen,
+		outlierEjections:     outlierEjections,
+		outlierFailOpen:      outlierFailOpen,
 		requestDuration:      requestDuration,
 		upstreamRoundTrip:    upstreamRoundTrip,
 		snapshotInfo:         snapshotInfoGauge,
+		breakerOpen:          breakerOpen,
 	}
 }
 
@@ -218,6 +246,65 @@ func (m *Metrics) RecordConfigApply(result string) {
 	}()
 
 	m.configApply.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) RecordCircuitOpen(poolKey string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	m.circuitOpen.WithLabelValues(canonPool).Inc()
+}
+
+func (m *Metrics) RecordOutlierEjection(poolKey string, reason string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.outlierEjections.WithLabelValues(canonPool, reason).Inc()
+}
+
+func (m *Metrics) RecordOutlierFailOpen(poolKey string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	m.outlierFailOpen.WithLabelValues(canonPool).Inc()
+}
+
+func (m *Metrics) SetBreakerOpen(poolKey string, open bool) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit("", poolKey)
+	canonPool := m.topk.CanonPool(poolKey)
+	value := 0.0
+	if open {
+		value = 1.0
+	}
+	m.breakerOpen.WithLabelValues(canonPool).Set(value)
 }
 
 func (m *Metrics) SetSnapshotInfo(version string, source string) {

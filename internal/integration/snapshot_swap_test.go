@@ -64,13 +64,13 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 		t.Fatalf("parse config: %v", err)
 	}
 	reg := registry.NewRegistry(0, 0)
-	initialSnap, err := runtime.BuildSnapshot(cfg, reg)
+	initialSnap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(initialSnap)
-	engine := proxy.NewEngine(reg, nil, nil)
+	engine := proxy.NewEngine(reg, nil, nil, nil, nil)
 	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: engine}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
@@ -107,7 +107,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse next config: %v", err)
 	}
-	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg)
+	nextSnap, err := runtime.BuildSnapshot(nextCfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build next snapshot: %v", err)
 	}

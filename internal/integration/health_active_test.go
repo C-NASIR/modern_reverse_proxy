@@ -67,12 +67,12 @@ func TestActiveHealthRecoversEndpoint(t *testing.T) {
 		},
 	}
 
-	snap, err := runtime.BuildSnapshot(cfg, reg)
+	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 

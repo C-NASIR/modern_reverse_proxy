@@ -38,13 +38,13 @@ func TestRejectBadConfigKeepsOldSnapshot(t *testing.T) {
 	}
 
 	reg := registry.NewRegistry(0, 0)
-	snap, err := runtime.BuildSnapshot(goodCfg, reg)
+	snap, err := runtime.BuildSnapshot(goodCfg, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
 
 	store := runtime.NewStore(snap)
-	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil)}
+	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil)}
 	proxyServer := httptest.NewServer(proxyHandler)
 	defer proxyServer.Close()
 
@@ -68,7 +68,7 @@ func TestRejectBadConfigKeepsOldSnapshot(t *testing.T) {
 		},
 	}
 
-	if _, err := runtime.BuildSnapshot(badCfg, reg); err == nil {
+	if _, err := runtime.BuildSnapshot(badCfg, reg, nil, nil); err == nil {
 		t.Fatalf("expected build snapshot to fail")
 	}
 

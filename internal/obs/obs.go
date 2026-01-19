@@ -22,4 +22,8 @@ type RequestContext struct {
 	SnapshotSource       string
 	UserAgent            string
 	RemoteAddr           string
+	BreakerState         string
+	BreakerDenied        bool
+	OutlierIgnored       bool
+	EndpointEjected      bool
 }

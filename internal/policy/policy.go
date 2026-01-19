@@ -37,10 +37,11 @@ type ClientRetryCapPolicy struct {
 }
 
 type Route struct {
-	ID         string
-	Host       string
-	PathPrefix string
-	Methods    map[string]bool
-	PoolName   string
-	Policy     Policy
+	ID            string
+	Host          string
+	PathPrefix    string
+	Methods       map[string]bool
+	PoolName      string
+	StablePoolKey string
+	Policy        Policy
 }

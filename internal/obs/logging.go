@@ -27,6 +27,10 @@ type AccessLogEntry struct {
 	SnapshotVersion      string `json:"snapshot_version"`
 	UserAgent            string `json:"user_agent,omitempty"`
 	RemoteAddr           string `json:"remote_addr,omitempty"`
+	BreakerState         string `json:"breaker_state,omitempty"`
+	BreakerDenied        bool   `json:"breaker_denied"`
+	OutlierIgnored       bool   `json:"outlier_ignored"`
+	EndpointEjected      bool   `json:"endpoint_ejected"`
 }
 
 func LogAccess(ctx RequestContext) {
@@ -50,6 +54,10 @@ func LogAccess(ctx RequestContext) {
 		SnapshotVersion:      defaultString(ctx.SnapshotVersion, "none"),
 		UserAgent:            ctx.UserAgent,
 		RemoteAddr:           ctx.RemoteAddr,
+		BreakerState:         defaultString(ctx.BreakerState, "none"),
+		BreakerDenied:        ctx.BreakerDenied,
+		OutlierIgnored:       ctx.OutlierIgnored,
+		EndpointEjected:      ctx.EndpointEjected,
 	}
 
 	data, err := json.Marshal(entry)

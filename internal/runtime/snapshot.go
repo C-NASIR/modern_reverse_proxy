@@ -7,9 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/health"
 	"modern_reverse_proxy/internal/obs"
+	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/policy"
 	"modern_reverse_proxy/internal/pool"
 	"modern_reverse_proxy/internal/registry"
@@ -17,11 +19,17 @@ import (
 )
 
 type Snapshot struct {
-	Router    *router.Router
-	Pools     map[string]pool.PoolKey
-	Version   string
-	CreatedAt time.Time
-	Source    string
+	Router      *router.Router
+	Pools       map[string]pool.PoolKey
+	PoolConfigs map[string]PoolConfig
+	Version     string
+	CreatedAt   time.Time
+	Source      string
+}
+
+type PoolConfig struct {
+	Breaker breaker.Config
+	Outlier outlier.Config
 }
 
 type Store struct {
@@ -65,6 +73,23 @@ const (
 	defaultMaxEject                      = 5 * time.Minute
 	defaultRetryMaxAttempts              = 1
 	defaultRetryClientLRUSize            = 10000
+	defaultBreakerFailureRateThreshold   = 50
+	defaultBreakerMinRequests            = 20
+	defaultBreakerEvalWindow             = 10 * time.Second
+	defaultBreakerOpenDuration           = 2 * time.Second
+	defaultBreakerHalfOpenMaxProbes      = 5
+	defaultOutlierConsecutiveFailures    = 5
+	defaultOutlierErrorRateThreshold     = 50
+	defaultOutlierErrorRateWindow        = 30 * time.Second
+	defaultOutlierMinRequests            = 20
+	defaultOutlierBaseEject              = 30 * time.Second
+	defaultOutlierMaxEject               = 10 * time.Minute
+	defaultOutlierMaxEjectPercent        = 50
+	defaultOutlierLatencyWindowSize      = 128
+	defaultOutlierLatencyEvalInterval    = 10 * time.Second
+	defaultOutlierLatencyMinSamples      = 50
+	defaultOutlierLatencyMultiplier      = 3
+	defaultOutlierLatencyConsecutive     = 3
 )
 
 var (
@@ -72,7 +97,8 @@ var (
 	defaultRetryErrors   = []string{"dial", "timeout"}
 )
 
-func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error) {
+func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry) (*Snapshot, error) {
+	_ = breakerReg
 	success := false
 	defer func() {
 		metrics := obs.DefaultMetrics()
@@ -94,6 +120,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 	}
 
 	pools := make(map[string]pool.PoolKey, len(cfg.Pools))
+	poolConfigs := make(map[string]PoolConfig, len(cfg.Pools))
 	for name, poolCfg := range cfg.Pools {
 		if len(poolCfg.Endpoints) == 0 {
 			return nil, fmt.Errorf("pool %q has no endpoints", name)
@@ -112,6 +139,33 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 		}
 
 		reg.Reconcile(poolKey, poolCfg.Endpoints, healthCfg)
+
+		poolConfigs[name] = PoolConfig{
+			Breaker: breaker.Config{
+				Enabled:                     poolCfg.Breaker.Enabled,
+				FailureRateThresholdPercent: intOrDefault(poolCfg.Breaker.FailureRateThresholdPercent, defaultBreakerFailureRateThreshold),
+				MinimumRequests:             intOrDefault(poolCfg.Breaker.MinimumRequests, defaultBreakerMinRequests),
+				EvaluationWindow:            durationOrDefault(poolCfg.Breaker.EvaluationWindowMS, defaultBreakerEvalWindow),
+				OpenDuration:                durationOrDefault(poolCfg.Breaker.OpenMS, defaultBreakerOpenDuration),
+				HalfOpenMaxProbes:           intOrDefault(poolCfg.Breaker.HalfOpenMaxProbes, defaultBreakerHalfOpenMaxProbes),
+			},
+			Outlier: outlier.Config{
+				Enabled:                     poolCfg.Outlier.Enabled,
+				ConsecutiveFailures:         intOrDefault(poolCfg.Outlier.ConsecutiveFailures, defaultOutlierConsecutiveFailures),
+				ErrorRateThresholdPercent:   intOrDefault(poolCfg.Outlier.ErrorRateThreshold, defaultOutlierErrorRateThreshold),
+				ErrorRateWindow:             durationOrDefault(poolCfg.Outlier.ErrorRateWindowMS, defaultOutlierErrorRateWindow),
+				MinRequests:                 intOrDefault(poolCfg.Outlier.MinRequests, defaultOutlierMinRequests),
+				BaseEjectDuration:           durationOrDefault(poolCfg.Outlier.BaseEjectMS, defaultOutlierBaseEject),
+				MaxEjectDuration:            durationOrDefault(poolCfg.Outlier.MaxEjectMS, defaultOutlierMaxEject),
+				MaxEjectPercent:             intOrDefault(poolCfg.Outlier.MaxEjectPercent, defaultOutlierMaxEjectPercent),
+				LatencyEnabled:              poolCfg.Outlier.LatencyEnabled,
+				LatencyWindowSize:           intOrDefault(poolCfg.Outlier.LatencyWindowSize, defaultOutlierLatencyWindowSize),
+				LatencyEvalInterval:         durationOrDefault(poolCfg.Outlier.LatencyEvalIntervalMS, defaultOutlierLatencyEvalInterval),
+				LatencyMinSamples:           intOrDefault(poolCfg.Outlier.LatencyMinSamples, defaultOutlierLatencyMinSamples),
+				LatencyMultiplier:           intOrDefault(poolCfg.Outlier.LatencyMultiplier, defaultOutlierLatencyMultiplier),
+				LatencyConsecutiveIntervals: intOrDefault(poolCfg.Outlier.LatencyConsecutiveIntervals, defaultOutlierLatencyConsecutive),
+			},
+		}
 	}
 
 	seenIDs := make(map[string]struct{}, len(cfg.Routes))
@@ -171,13 +225,21 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 			},
 		}
 
+		stablePoolKey := fmt.Sprintf("%s::%s", route.ID, route.Pool)
+		if outlierReg != nil {
+			poolCfg := cfg.Pools[route.Pool]
+			outlierCfg := poolConfigs[route.Pool].Outlier
+			outlierReg.Reconcile(stablePoolKey, poolCfg.Endpoints, outlierCfg)
+		}
+
 		routes = append(routes, policy.Route{
-			ID:         route.ID,
-			Host:       route.Host,
-			PathPrefix: route.PathPrefix,
-			Methods:    methods,
-			PoolName:   route.Pool,
-			Policy:     policyRuntime,
+			ID:            route.ID,
+			Host:          route.Host,
+			PathPrefix:    route.PathPrefix,
+			Methods:       methods,
+			PoolName:      route.Pool,
+			StablePoolKey: stablePoolKey,
+			Policy:        policyRuntime,
 		})
 	}
 
@@ -187,11 +249,12 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry) (*Snapshot, error
 	}
 
 	snapshot := &Snapshot{
-		Router:    compiled,
-		Pools:     pools,
-		Version:   fmt.Sprintf("v-%d", time.Now().UnixNano()),
-		CreatedAt: time.Now().UTC(),
-		Source:    "file",
+		Router:      compiled,
+		Pools:       pools,
+		PoolConfigs: poolConfigs,
+		Version:     fmt.Sprintf("v-%d", time.Now().UnixNano()),
+		CreatedAt:   time.Now().UTC(),
+		Source:      "file",
 	}
 	success = true
 	return snapshot, nil
