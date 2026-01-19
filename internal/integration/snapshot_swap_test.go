@@ -62,7 +62,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	initialSnap, err := config.BuildSnapshot(cfg)
+	initialSnap, err := runtime.BuildSnapshot(cfg)
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse next config: %v", err)
 	}
-	nextSnap, err := config.BuildSnapshot(nextCfg)
+	nextSnap, err := runtime.BuildSnapshot(nextCfg)
 	if err != nil {
 		t.Fatalf("build next snapshot: %v", err)
 	}

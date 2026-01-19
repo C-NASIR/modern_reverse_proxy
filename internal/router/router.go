@@ -4,42 +4,21 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"modern_reverse_proxy/internal/policy"
 )
 
-type RouteConfig struct {
-	ID         string
-	Host       string
-	PathPrefix string
-	Pool       string
-}
-
-type Route struct {
-	ID         string
-	Host       string
-	PathPrefix string
-	PoolName   string
-}
-
 type Router struct {
-	routes []Route
+	routes []policy.Route
 }
 
-func NewRouter(configs []RouteConfig) *Router {
-	routes := make([]Route, 0, len(configs))
-	for _, cfg := range configs {
-		routes = append(routes, Route{
-			ID:         cfg.ID,
-			Host:       cfg.Host,
-			PathPrefix: cfg.PathPrefix,
-			PoolName:   cfg.Pool,
-		})
-	}
-	return &Router{routes: routes}
+func NewRouter(routes []policy.Route) *Router {
+	return &Router{routes: append([]policy.Route(nil), routes...)}
 }
 
-func (r *Router) Match(req *http.Request) (Route, bool) {
+func (r *Router) Match(req *http.Request) (policy.Route, bool) {
 	if r == nil {
-		return Route{}, false
+		return policy.Route{}, false
 	}
 	host := req.Host
 	if h, _, err := net.SplitHostPort(req.Host); err == nil {
@@ -48,9 +27,12 @@ func (r *Router) Match(req *http.Request) (Route, bool) {
 
 	for _, route := range r.routes {
 		if route.Host == host && strings.HasPrefix(req.URL.Path, route.PathPrefix) {
+			if route.Methods != nil && !route.Methods[req.Method] {
+				return policy.Route{}, false
+			}
 			return route, true
 		}
 	}
 
-	return Route{}, false
+	return policy.Route{}, false
 }

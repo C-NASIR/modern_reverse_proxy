@@ -22,7 +22,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse config: %v", err)
 	}
-	snap, err := config.BuildSnapshot(cfg)
+	snap, err := runtime.BuildSnapshot(cfg)
 	if err != nil {
 		log.Fatalf("build snapshot: %v", err)
 	}

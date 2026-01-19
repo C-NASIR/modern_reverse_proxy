@@ -1,48 +1,37 @@
 package proxy
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"sync/atomic"
+	"sync"
 	"time"
+
+	"modern_reverse_proxy/internal/policy"
 )
 
-type PoolRuntime struct {
-	endpoints []string
-	rr        uint64
-}
-
-func NewPoolRuntime(endpoints []string) *PoolRuntime {
-	return &PoolRuntime{endpoints: append([]string(nil), endpoints...)}
-}
-
-func (p *PoolRuntime) Pick() string {
-	if p == nil || len(p.endpoints) == 0 {
-		return ""
-	}
-	idx := atomic.AddUint64(&p.rr, 1) - 1
-	return p.endpoints[idx%uint64(len(p.endpoints))]
-}
-
 type Engine struct {
-	Transport *http.Transport
+	mu         sync.Mutex
+	transports map[string]*http.Transport
 }
 
 func NewEngine() *Engine {
-	transport := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		MaxIdleConns:        256,
-		MaxIdleConnsPerHost: 64,
-		IdleConnTimeout:     30 * time.Second,
-	}
-	return &Engine{Transport: transport}
+	return &Engine{transports: make(map[string]*http.Transport)}
 }
 
-func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr string) {
+func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr string, policy policy.Policy, requestID string) {
 	if upstreamAddr == "" {
-		http.Error(w, "no upstream available", http.StatusBadGateway)
+		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "no upstream available")
+		return
+	}
+
+	transport, err := e.transportFor(policy)
+	if err != nil {
+		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream transport unavailable")
 		return
 	}
 
@@ -55,7 +44,7 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr st
 
 	outbound, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), r.Body)
 	if err != nil {
-		http.Error(w, "failed to create upstream request", http.StatusBadGateway)
+		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "failed to create upstream request")
 		return
 	}
 
@@ -63,14 +52,27 @@ func (e *Engine) Forward(w http.ResponseWriter, r *http.Request, upstreamAddr st
 	outbound.Host = upstreamAddr
 	setForwardedHeaders(outbound, r)
 
-	resp, err := e.Transport.RoundTrip(outbound)
+	resp, err := transport.RoundTrip(outbound)
 	if err != nil {
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		if isRequestTimeout(r.Context()) {
+			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "request_timeout", "request timed out")
+			return
+		}
+		if isTimeoutError(err) {
+			WriteProxyError(w, requestID, http.StatusGatewayTimeout, "upstream_timeout", "upstream timeout")
+			return
+		}
+		if isDialError(err) {
+			WriteProxyError(w, requestID, http.StatusBadGateway, "upstream_connect_failed", "upstream connect failed")
+			return
+		}
+		WriteProxyError(w, requestID, http.StatusBadGateway, "bad_gateway", "upstream request failed")
 		return
 	}
 	defer resp.Body.Close()
 
 	copyHeaders(w.Header(), resp.Header)
+	w.Header().Set(RequestIDHeader, requestID)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
@@ -102,4 +104,53 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func (e *Engine) transportFor(policy policy.Policy) (*http.Transport, error) {
+	key := fmt.Sprintf("%d/%d", policy.UpstreamDialTimeout.Nanoseconds(), policy.UpstreamResponseHeaderTimeout.Nanoseconds())
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if transport := e.transports[key]; transport != nil {
+		return transport, nil
+	}
+
+	if policy.UpstreamDialTimeout <= 0 || policy.UpstreamResponseHeaderTimeout <= 0 {
+		return nil, errors.New("invalid policy timeouts")
+	}
+
+	dialer := &net.Dialer{Timeout: policy.UpstreamDialTimeout}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ResponseHeaderTimeout: policy.UpstreamResponseHeaderTimeout,
+		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          256,
+		MaxIdleConnsPerHost:   64,
+		ForceAttemptHTTP2:     true,
+	}
+
+	e.transports[key] = transport
+	return transport, nil
+}
+
+func isRequestTimeout(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded)
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
+}
+
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	return false
 }
