@@ -32,6 +32,7 @@ type AccessLogEntry struct {
 	RetryBudgetExhausted bool     `json:"retry_budget_exhausted"`
 	CacheStatus          string   `json:"cache_status"`
 	SnapshotVersion      string   `json:"snapshot_version"`
+	SnapshotSource       string   `json:"snapshot_source"`
 	TrafficVariant       string   `json:"traffic_variant"`
 	CohortMode           string   `json:"cohort_mode"`
 	CohortKeyPresent     bool     `json:"cohort_key_present"`
@@ -74,6 +75,7 @@ func LogAccess(ctx RequestContext) {
 		RetryBudgetExhausted: ctx.RetryBudgetExhausted,
 		CacheStatus:          defaultString(ctx.CacheStatus, "bypass"),
 		SnapshotVersion:      defaultString(ctx.SnapshotVersion, "none"),
+		SnapshotSource:       defaultString(ctx.SnapshotSource, "none"),
 		TrafficVariant:       defaultString(ctx.TrafficVariant, "stable"),
 		CohortMode:           defaultString(ctx.CohortMode, "random"),
 		CohortKeyPresent:     ctx.CohortKeyPresent,

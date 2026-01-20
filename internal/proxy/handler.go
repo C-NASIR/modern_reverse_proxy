@@ -44,6 +44,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	recorder.Header().Set(RequestIDHeader, requestID)
+	if strings.HasPrefix(r.URL.Path, "/admin") {
+		WriteProxyError(recorder, requestID, http.StatusNotFound, "not_found", "not found")
+		return
+	}
 
 	ctx := obs.StartTrace(r.Context(), r)
 	ctx = WithRequestID(ctx, requestID)

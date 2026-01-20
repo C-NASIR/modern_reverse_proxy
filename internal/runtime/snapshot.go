@@ -34,6 +34,7 @@ type Snapshot struct {
 	Version     string
 	CreatedAt   time.Time
 	Source      string
+	RouteCount  int
 }
 
 type PoolConfig struct {
@@ -397,6 +398,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		Version:     fmt.Sprintf("v-%d", time.Now().UnixNano()),
 		CreatedAt:   time.Now().UTC(),
 		Source:      "file",
+		RouteCount:  len(routes),
 	}
 	success = true
 	return snapshot, nil

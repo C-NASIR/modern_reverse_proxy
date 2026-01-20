@@ -18,6 +18,7 @@ type Route struct {
 	Methods    []string    `json:"methods"`
 	Pool       string      `json:"pool"`
 	Policy     RoutePolicy `json:"policy"`
+	Overlay    bool        `json:"overlay"`
 }
 
 type Pool struct {
@@ -25,6 +26,7 @@ type Pool struct {
 	Health    HealthConfig  `json:"health"`
 	Breaker   BreakerConfig `json:"breaker"`
 	Outlier   OutlierConfig `json:"outlier"`
+	Overlay   bool          `json:"overlay"`
 }
 
 type RoutePolicy struct {

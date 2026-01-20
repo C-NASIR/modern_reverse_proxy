@@ -25,6 +25,8 @@ type Metrics struct {
 	retries                *prometheus.CounterVec
 	retryBudgetExhausted   *prometheus.CounterVec
 	configApply            *prometheus.CounterVec
+	configApplyDuration    prometheus.Histogram
+	configConflicts        prometheus.Counter
 	circuitOpen            *prometheus.CounterVec
 	outlierEjections       *prometheus.CounterVec
 	outlierFailOpen        *prometheus.CounterVec
@@ -98,6 +100,17 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Name: "proxy_config_apply_total",
 		Help: "Total config apply attempts",
 	}, []string{"result"})
+
+	configApplyDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "proxy_config_apply_duration_seconds",
+		Help:    "Config apply duration",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	configConflicts := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "proxy_config_conflict_total",
+		Help: "Total config provider conflicts",
+	})
 
 	circuitOpen := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "proxy_circuit_open_total",
@@ -191,7 +204,7 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Help: "Active snapshot metadata",
 	}, []string{"version", "source"})
 
-	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, variantRequests, variantErrors, overloadRejects, pluginCalls, pluginBypass, pluginShortCircuit, pluginFailClosed, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
+	registry.MustRegister(requests, upstreamErrors, proxyErrors, retries, retryBudgetExhausted, configApply, configApplyDuration, configConflicts, circuitOpen, outlierEjections, outlierFailOpen, mtlsReject, cacheRequests, cacheCoalesceBreakaway, cacheStoreFail, variantRequests, variantErrors, overloadRejects, pluginCalls, pluginBypass, pluginShortCircuit, pluginFailClosed, requestDuration, upstreamRoundTrip, snapshotInfoGauge, breakerOpen)
 
 	return &Metrics{
 		registry:               registry,
@@ -202,6 +215,8 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		retries:                retries,
 		retryBudgetExhausted:   retryBudgetExhausted,
 		configApply:            configApply,
+		configApplyDuration:    configApplyDuration,
+		configConflicts:        configConflicts,
 		circuitOpen:            circuitOpen,
 		outlierEjections:       outlierEjections,
 		outlierFailOpen:        outlierFailOpen,
@@ -323,6 +338,28 @@ func (m *Metrics) RecordConfigApply(result string) {
 	}()
 
 	m.configApply.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) RecordConfigApplyDuration(duration time.Duration) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.configApplyDuration.Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordConfigConflict() {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.configConflicts.Inc()
 }
 
 func (m *Metrics) RecordCircuitOpen(poolKey string) {

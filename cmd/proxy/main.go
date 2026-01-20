@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"os"
 
+	"modern_reverse_proxy/internal/admin"
+	"modern_reverse_proxy/internal/apply"
 	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/cache"
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/plugin"
+	"modern_reverse_proxy/internal/provider"
 	"modern_reverse_proxy/internal/proxy"
 	"modern_reverse_proxy/internal/registry"
 	"modern_reverse_proxy/internal/runtime"
@@ -49,6 +52,17 @@ func main() {
 	cacheStore := cache.NewMemoryStore(cache.DefaultMaxObjectBytes)
 	cacheCoalescer := cache.NewCoalescer(cache.DefaultMaxFlights)
 	cacheLayer := cache.NewCache(cacheStore, cacheCoalescer)
+	adminProvider := provider.NewAdminPush()
+	fileProvider := provider.NewFileProvider(os.Args[1])
+	applyManager := apply.NewManager(apply.ManagerConfig{
+		Store:           store,
+		Registry:        reg,
+		BreakerRegistry: breakerReg,
+		OutlierRegistry: outlierReg,
+		TrafficRegistry: trafficReg,
+		Providers:       []provider.Provider{fileProvider, adminProvider},
+		AdminProvider:   adminProvider,
+	})
 	handler := &proxy.Handler{
 		Store:           store,
 		Registry:        reg,
@@ -84,6 +98,42 @@ func main() {
 	}
 	if serverHandle.TLSAddr != "" {
 		log.Printf("listening on https://%s", serverHandle.TLSAddr)
+	}
+
+	adminAddr := os.Getenv("ADMIN_LISTEN_ADDR")
+	if adminAddr != "" {
+		adminToken := os.Getenv("ADMIN_TOKEN")
+		adminCert := os.Getenv("ADMIN_CERT_FILE")
+		adminKey := os.Getenv("ADMIN_KEY_FILE")
+		adminCA := os.Getenv("ADMIN_CLIENT_CA_FILE")
+		if adminToken == "" {
+			log.Fatalf("ADMIN_TOKEN is required for admin listener")
+		}
+		if adminCA == "" {
+			log.Fatalf("ADMIN_CLIENT_CA_FILE is required for admin listener")
+		}
+		auth, err := admin.NewAuthenticator(admin.AuthConfig{Token: adminToken, ClientCAFile: adminCA})
+		if err != nil {
+			log.Fatalf("admin auth: %v", err)
+		}
+		adminTLS, err := admin.TLSConfig(adminCert, adminKey, adminCA)
+		if err != nil {
+			log.Fatalf("admin tls: %v", err)
+		}
+		adminHandler := admin.NewHandler(admin.HandlerConfig{
+			Store:        store,
+			ApplyManager: applyManager,
+			Auth:         auth,
+			RateLimiter:  admin.NewRateLimiter(admin.RateLimitConfig{}),
+			AdminStore:   admin.NewStore(),
+		})
+		adminServer, err := server.StartServers(adminHandler, adminTLS, "", adminAddr)
+		if err != nil {
+			log.Fatalf("start admin server: %v", err)
+		}
+		if adminServer.TLSAddr != "" {
+			log.Printf("admin listening on https://%s", adminServer.TLSAddr)
+		}
 	}
 	select {}
 }

@@ -89,6 +89,28 @@ func WriteClientCert(t *testing.T, commonName string, ca CA) CertFiles {
 	}
 }
 
+func WriteServerCert(t *testing.T, serverName string, ca CA) CertFiles {
+	t.Helper()
+	key := generateKey(t)
+	template := baseTemplate(serverName, []string{serverName}, false)
+	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	template.KeyUsage = x509.KeyUsageDigitalSignature
+
+	der := createCertificate(t, template, ca.Cert, &key.PublicKey, ca.Key)
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse server cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := marshalKey(t, key)
+
+	return CertFiles{
+		Cert:     cert,
+		CertFile: writeTempFile(t, "server.pem", certPEM),
+		KeyFile:  writeTempFile(t, "server.key", keyPEM),
+	}
+}
+
 func generateKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
