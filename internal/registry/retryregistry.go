@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -94,6 +95,15 @@ func (r *RetryRegistry) Close() {
 	default:
 		close(r.stopCh)
 	}
+}
+
+func (r *RetryRegistry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	return nil
 }
 
 func (r *RetryRegistry) reapLoop() {

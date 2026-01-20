@@ -113,7 +113,9 @@ func TestSnapshotSwapAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build next snapshot: %v", err)
 	}
-	store.Swap(nextSnap)
+	if err := store.Swap(nextSnap); err != nil {
+		t.Fatalf("swap snapshot: %v", err)
+	}
 
 	testutil.Eventually(t, time.Second, 20*time.Millisecond, func() error {
 		body, err := makeRequest(client, proxyServer.URL, "example.local")

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -94,6 +95,25 @@ func (r *Registry) Close() {
 	default:
 		close(r.stopCh)
 	}
+}
+
+func (r *Registry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	r.mu.RLock()
+	pools := make([]*pool.PoolRuntime, 0, len(r.pools))
+	for _, poolRuntime := range r.pools {
+		pools = append(pools, poolRuntime)
+	}
+	r.mu.RUnlock()
+
+	for _, poolRuntime := range pools {
+		poolRuntime.Stop()
+	}
+	return nil
 }
 
 func (r *Registry) getPool(key pool.PoolKey) *pool.PoolRuntime {

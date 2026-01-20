@@ -1,6 +1,7 @@
 package traffic
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sync"
@@ -136,12 +137,28 @@ func (r *Registry) Close() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	for _, entry := range r.routes {
+		if entry.plan != nil {
+			entry.plan.Stop()
+		}
+	}
+	r.mu.Unlock()
 	select {
 	case <-r.stopCh:
 		return
 	default:
 		close(r.stopCh)
 	}
+}
+
+func (r *Registry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	return nil
 }
 
 func (r *Registry) reapLoop() {

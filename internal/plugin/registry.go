@@ -102,3 +102,12 @@ func (r *Registry) Close() {
 		_ = client.Close()
 	}
 }
+
+func (r *Registry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	return nil
+}

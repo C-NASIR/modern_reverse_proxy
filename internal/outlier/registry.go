@@ -1,6 +1,7 @@
 package outlier
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -136,12 +137,26 @@ func (r *Registry) Close() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	for _, entry := range r.pools {
+		entry.stopLatencyLoopLocked()
+	}
+	r.mu.Unlock()
 	select {
 	case <-r.stopCh:
 		return
 	default:
 		close(r.stopCh)
 	}
+}
+
+func (r *Registry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	return nil
 }
 
 func (r *Registry) HasPool(key string) bool {

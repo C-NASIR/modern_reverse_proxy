@@ -177,6 +177,24 @@ func (p *PoolRuntime) Reap(now time.Time) []string {
 	return removed
 }
 
+func (p *PoolRuntime) Stop() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	endpoints := make([]*EndpointRuntime, 0, len(p.endpoints))
+	for _, endpoint := range p.endpoints {
+		endpoints = append(endpoints, endpoint)
+	}
+	p.endpoints = make(map[string]*EndpointRuntime)
+	p.order = nil
+	p.mu.Unlock()
+
+	for _, endpoint := range endpoints {
+		endpoint.Stop()
+	}
+}
+
 type EndpointRuntime struct {
 	addr                     string
 	state                    atomic.Int32

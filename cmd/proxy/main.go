@@ -16,6 +16,7 @@ import (
 	"modern_reverse_proxy/internal/bundle"
 	"modern_reverse_proxy/internal/cache"
 	"modern_reverse_proxy/internal/config"
+	"modern_reverse_proxy/internal/limits"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/plugin"
@@ -61,6 +62,11 @@ func main() {
 	}
 
 	store := runtime.NewStore(snap)
+	shutdownConfig, err := runtime.ShutdownFromConfig(cfg.Shutdown)
+	if err != nil {
+		log.Fatalf("shutdown config: %v", err)
+	}
+	inflight := runtime.NewInflightTracker()
 	cacheStore := cache.NewMemoryStore(cache.DefaultMaxObjectBytes)
 	cacheCoalescer := cache.NewCoalescer(cache.DefaultMaxFlights)
 	cacheLayer := cache.NewCache(cacheStore, cacheCoalescer)
@@ -74,6 +80,7 @@ func main() {
 		TrafficRegistry: trafficReg,
 		Providers:       []provider.Provider{fileProvider, adminProvider},
 		AdminProvider:   adminProvider,
+		Pressure:        runtime.NewPressure(store),
 	})
 	rolloutManager := rollout.NewManager(rollout.Config{
 		ApplyManager:     applyManager,
@@ -83,6 +90,7 @@ func main() {
 		ErrorRateWindow:  parseDurationMS(os.Getenv("ROLLOUT_ERROR_WINDOW_MS"), 10*time.Second),
 		ErrorRatePercent: parseFloatEnv(os.Getenv("ROLLOUT_ERROR_PERCENT"), 1),
 	})
+	engine := proxy.NewEngine(reg, retryReg, metrics, breakerReg, outlierReg)
 	handler := &proxy.Handler{
 		Store:           store,
 		Registry:        reg,
@@ -90,9 +98,10 @@ func main() {
 		BreakerRegistry: breakerReg,
 		OutlierRegistry: outlierReg,
 		PluginRegistry:  pluginReg,
-		Engine:          proxy.NewEngine(reg, retryReg, metrics, breakerReg, outlierReg),
+		Engine:          engine,
 		Metrics:         metrics,
 		Cache:           cacheLayer,
+		Inflight:        inflight,
 	}
 
 	mux := http.NewServeMux()
@@ -109,7 +118,39 @@ func main() {
 		tlsBaseConfig = server.BaseTLSConfig(store)
 	}
 
-	serverHandle, err := server.StartServers(mux, tlsBaseConfig, listenAddr, snap.TLSAddr)
+	stoppers := []server.Stopper{reg, retryReg, breakerReg, outlierReg, trafficReg, pluginReg}
+	pullURL := os.Getenv("PULL_URL")
+	if pullURL != "" {
+		if len(publicKey) == 0 {
+			log.Fatalf("PUBLIC_KEY_FILE is required for pull mode")
+		}
+		puller := pull.NewPuller(pull.Config{
+			Enabled:        true,
+			BaseURL:        pullURL,
+			Interval:       parseDurationMS(os.Getenv("PULL_INTERVAL_MS"), 5*time.Second),
+			Jitter:         parseDurationMS(os.Getenv("PULL_JITTER_MS"), 500*time.Millisecond),
+			PublicKey:      publicKey,
+			RolloutManager: rolloutManager,
+			Store:          store,
+			Token:          os.Getenv("PULL_TOKEN"),
+		})
+		pullCtx, pullCancel := context.WithCancel(context.Background())
+		stoppers = append(stoppers, server.StopFunc(func(ctx context.Context) error {
+			pullCancel()
+			return nil
+		}))
+		go puller.Run(pullCtx)
+	}
+
+	serverHandle, err := server.StartServers(mux, tlsBaseConfig, listenAddr, snap.TLSAddr, server.Options{
+		Limits:   snap.Limits,
+		Shutdown: shutdownConfig,
+		Inflight: inflight,
+		Stoppers: stoppers,
+		CloseIdle: []func(){
+			engine.CloseIdleConnections,
+		},
+	})
 	if err != nil {
 		log.Fatalf("start servers: %v", err)
 	}
@@ -151,7 +192,10 @@ func main() {
 			AllowUnsigned:  allowUnsigned,
 			RolloutManager: rolloutManager,
 		})
-		adminServer, err := server.StartServers(adminHandler, adminTLS, "", adminAddr)
+		adminServer, err := server.StartServers(adminHandler, adminTLS, "", adminAddr, server.Options{
+			Limits:   limits.Default(),
+			Shutdown: runtime.DefaultShutdownConfig(),
+		})
 		if err != nil {
 			log.Fatalf("start admin server: %v", err)
 		}
@@ -160,24 +204,6 @@ func main() {
 		}
 	}
 
-	pullURL := os.Getenv("PULL_URL")
-	if pullURL != "" {
-		if len(publicKey) == 0 {
-			log.Fatalf("PUBLIC_KEY_FILE is required for pull mode")
-		}
-		puller := pull.NewPuller(pull.Config{
-			Enabled:        true,
-			BaseURL:        pullURL,
-			Interval:       parseDurationMS(os.Getenv("PULL_INTERVAL_MS"), 5*time.Second),
-			Jitter:         parseDurationMS(os.Getenv("PULL_JITTER_MS"), 500*time.Millisecond),
-			PublicKey:      publicKey,
-			RolloutManager: rolloutManager,
-			Store:          store,
-			Token:          os.Getenv("PULL_TOKEN"),
-		})
-		ctx := context.Background()
-		go puller.Run(ctx)
-	}
 	select {}
 }
 

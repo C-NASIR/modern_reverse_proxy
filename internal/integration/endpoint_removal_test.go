@@ -94,7 +94,9 @@ func TestEndpointRemovalDrainsAndDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
-	store.Swap(snap2)
+	if err := store.Swap(snap2); err != nil {
+		t.Fatalf("swap snapshot: %v", err)
+	}
 
 	resp, _ := sendProxyRequest(t, client, proxyServer.URL, "example.local", http.MethodGet, "/")
 	if resp.Header.Get("X-Upstream") != "B" {

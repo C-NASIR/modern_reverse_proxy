@@ -1,6 +1,7 @@
 package breaker
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -75,6 +76,15 @@ func (r *Registry) Close() {
 	default:
 		close(r.stopCh)
 	}
+}
+
+func (r *Registry) Stop(ctx context.Context) error {
+	_ = ctx
+	if r == nil {
+		return nil
+	}
+	r.Close()
+	return nil
 }
 
 func (r *Registry) Has(key string) bool {

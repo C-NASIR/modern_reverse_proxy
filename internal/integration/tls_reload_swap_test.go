@@ -65,7 +65,9 @@ func TestTLSReloadSwap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build snapshot2: %v", err)
 	}
-	store.Swap(snap2)
+	if err := store.Swap(snap2); err != nil {
+		t.Fatalf("swap snapshot: %v", err)
+	}
 
 	client = &http.Client{
 		Timeout: 2 * time.Second,

@@ -100,7 +100,9 @@ func TestBreakerPersistsAcrossSnapshotSwap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
-	store.Swap(nextSnap)
+	if err := store.Swap(nextSnap); err != nil {
+		t.Fatalf("swap snapshot: %v", err)
+	}
 
 	resp, body := sendProxyRequest(t, client, proxyServer.URL, "example.local", http.MethodGet, "/")
 	if resp.StatusCode != http.StatusServiceUnavailable {

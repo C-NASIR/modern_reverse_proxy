@@ -12,6 +12,7 @@ import (
 	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/config"
 	"modern_reverse_proxy/internal/health"
+	"modern_reverse_proxy/internal/limits"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/plugin"
@@ -35,39 +36,14 @@ type Snapshot struct {
 	CreatedAt   time.Time
 	Source      string
 	RouteCount  int
+	Limits      limits.Limits
+	refCount    atomic.Int64
+	retiredAt   atomic.Int64
 }
 
 type PoolConfig struct {
 	Breaker breaker.Config
 	Outlier outlier.Config
-}
-
-type Store struct {
-	v atomic.Value
-}
-
-func NewStore(initial *Snapshot) *Store {
-	store := &Store{}
-	store.v.Store(initial)
-	return store
-}
-
-func (s *Store) Get() *Snapshot {
-	if s == nil {
-		return nil
-	}
-	value := s.v.Load()
-	if value == nil {
-		return nil
-	}
-	return value.(*Snapshot)
-}
-
-func (s *Store) Swap(next *Snapshot) {
-	if s == nil {
-		return
-	}
-	s.v.Store(next)
 }
 
 const (
@@ -140,6 +116,11 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 	}
 	if reg == nil {
 		return nil, errors.New("registry is nil")
+	}
+
+	limitConfig, err := limits.FromConfig(cfg.Limits)
+	if err != nil {
+		return nil, err
 	}
 	if trafficReg == nil {
 		trafficReg = traffic.NewRegistry(0, 0)
@@ -399,6 +380,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		CreatedAt:   time.Now().UTC(),
 		Source:      "file",
 		RouteCount:  len(routes),
+		Limits:      limitConfig,
 	}
 	success = true
 	return snapshot, nil

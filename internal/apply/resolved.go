@@ -75,7 +75,9 @@ func (m *Manager) ApplyResolvedVersion(ctx context.Context, raw []byte, source s
 
 	if mode == ModeApply {
 		if m.store != nil {
-			m.store.Swap(snapshot)
+			if err := m.store.Swap(snapshot); err != nil {
+				return nil, err
+			}
 		}
 	}
 

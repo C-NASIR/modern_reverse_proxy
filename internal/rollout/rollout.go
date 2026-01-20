@@ -126,7 +126,10 @@ func (m *Manager) rollback(previous *runtime.Snapshot, targetVersion string) {
 	if previous == nil || m.store == nil {
 		return
 	}
-	m.store.Swap(previous)
+	if err := m.store.Swap(previous); err != nil {
+		log.Printf("rollback_from_version=%s rollback_result=error reason=%v", targetVersion, err)
+		return
+	}
 	if m.metrics != nil {
 		m.metrics.RecordRollback("success")
 	}

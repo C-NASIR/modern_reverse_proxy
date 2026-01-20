@@ -30,7 +30,7 @@ const (
 var (
 	ErrConfigTooLarge = errors.New("config too large")
 	ErrCompileTimeout = errors.New("compile timeout")
-	ErrPressure       = errors.New("config pressure")
+	ErrPressure       = errors.New("config_pressure")
 )
 
 type PressureChecker interface {
@@ -161,7 +161,9 @@ func (m *Manager) Apply(ctx context.Context, raw []byte, source string, mode Mod
 
 	if mode == ModeApply {
 		if m.store != nil {
-			m.store.Swap(compiled)
+			if err := m.store.Swap(compiled); err != nil {
+				return nil, err
+			}
 		}
 	}
 

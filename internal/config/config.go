@@ -7,6 +7,8 @@ import (
 type Config struct {
 	ListenAddr string          `json:"listen_addr"`
 	TLS        TLSConfig       `json:"tls"`
+	Limits     LimitsConfig    `json:"limits"`
+	Shutdown   ShutdownConfig  `json:"shutdown"`
 	Routes     []Route         `json:"routes"`
 	Pools      map[string]Pool `json:"pools"`
 }
@@ -56,6 +58,24 @@ type TLSCert struct {
 	ServerName string `json:"server_name"`
 	CertFile   string `json:"cert_file"`
 	KeyFile    string `json:"key_file"`
+}
+
+type LimitsConfig struct {
+	MaxHeaderBytes          int    `json:"max_header_bytes"`
+	MaxHeaderCount          int    `json:"max_header_count"`
+	MaxURLBytes             int    `json:"max_url_bytes"`
+	MaxBodyBytes            *int64 `json:"max_body_bytes"`
+	ReadHeaderTimeoutMS     int    `json:"read_header_timeout_ms"`
+	ReadTimeoutMS           int    `json:"read_timeout_ms"`
+	WriteTimeoutMS          int    `json:"write_timeout_ms"`
+	IdleTimeoutMS           int    `json:"idle_timeout_ms"`
+	ResponseStreamTimeoutMS int    `json:"response_stream_timeout_ms"`
+}
+
+type ShutdownConfig struct {
+	DrainMS           int `json:"drain_ms"`
+	GracefulTimeoutMS int `json:"graceful_timeout_ms"`
+	ForceCloseMS      int `json:"force_close_ms"`
 }
 
 type RetryConfig struct {

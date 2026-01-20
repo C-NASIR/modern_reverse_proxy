@@ -382,3 +382,19 @@ func (e *Engine) recordUpstreamError(poolKey pool.PoolKey, category string) {
 	}
 	e.metrics.RecordUpstreamError(string(poolKey), category)
 }
+
+func (e *Engine) CloseIdleConnections() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	transports := make([]*http.Transport, 0, len(e.transports))
+	for _, transport := range e.transports {
+		transports = append(transports, transport)
+	}
+	e.mu.Unlock()
+
+	for _, transport := range transports {
+		transport.CloseIdleConnections()
+	}
+}

@@ -90,7 +90,9 @@ func TestStateReapAfterPoolRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build empty snapshot: %v", err)
 	}
-	store.Swap(emptySnap)
+	if err := store.Swap(emptySnap); err != nil {
+		t.Fatalf("swap snapshot: %v", err)
+	}
 
 	stableKey := "r1::p1"
 	testutil.Eventually(t, 2*time.Second, 20*time.Millisecond, func() error {

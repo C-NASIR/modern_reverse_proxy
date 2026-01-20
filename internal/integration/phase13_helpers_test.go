@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"crypto/x509"
 	"net/http"
 	"testing"
 
@@ -13,29 +12,36 @@ import (
 	"modern_reverse_proxy/internal/traffic"
 )
 
-func startTLSProxy(t *testing.T, cfg *config.Config) (*server.Server, *runtime.Store, *registry.Registry) {
+func startProxy(t *testing.T, cfgJSON string) (*server.Server, *runtime.Store, *registry.Registry, *traffic.Registry) {
 	t.Helper()
+	cfg, err := config.ParseJSON([]byte(cfgJSON))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+
 	reg := registry.NewRegistry(0, 0)
 	trafficReg := traffic.NewRegistry(0, 0)
 
 	snap, err := runtime.BuildSnapshot(cfg, reg, nil, nil, trafficReg)
 	if err != nil {
 		reg.Close()
+		trafficReg.Close()
 		t.Fatalf("build snapshot: %v", err)
 	}
-
 	store := runtime.NewStore(snap)
 	shutdownConfig, err := runtime.ShutdownFromConfig(cfg.Shutdown)
 	if err != nil {
 		reg.Close()
+		trafficReg.Close()
 		t.Fatalf("shutdown config: %v", err)
 	}
 	inflight := runtime.NewInflightTracker()
+
 	proxyHandler := &proxy.Handler{Store: store, Registry: reg, Engine: proxy.NewEngine(reg, nil, nil, nil, nil), Inflight: inflight}
 	mux := http.NewServeMux()
 	mux.Handle("/", proxyHandler)
 
-	serverHandle, err := server.StartServers(mux, server.BaseTLSConfig(store), "", snap.TLSAddr, server.Options{
+	serverHandle, err := server.StartServers(mux, nil, cfg.ListenAddr, snap.TLSAddr, server.Options{
 		Limits:   snap.Limits,
 		Shutdown: shutdownConfig,
 		Inflight: inflight,
@@ -43,25 +49,15 @@ func startTLSProxy(t *testing.T, cfg *config.Config) (*server.Server, *runtime.S
 	})
 	if err != nil {
 		reg.Close()
-		t.Fatalf("start tls server: %v", err)
+		trafficReg.Close()
+		t.Fatalf("start proxy: %v", err)
 	}
 
 	t.Cleanup(func() {
 		_ = serverHandle.Close()
 		reg.Close()
+		trafficReg.Close()
 	})
 
-	return serverHandle, store, reg
-}
-
-func x509CertPool(t *testing.T, certs ...*x509.Certificate) *x509.CertPool {
-	t.Helper()
-	pool := x509.NewCertPool()
-	for _, cert := range certs {
-		if cert == nil {
-			continue
-		}
-		pool.AddCert(cert)
-	}
-	return pool
+	return serverHandle, store, reg, trafficReg
 }

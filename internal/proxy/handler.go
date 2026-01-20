@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 
 	"modern_reverse_proxy/internal/breaker"
 	"modern_reverse_proxy/internal/cache"
+	"modern_reverse_proxy/internal/limits"
 	"modern_reverse_proxy/internal/obs"
 	"modern_reverse_proxy/internal/outlier"
 	"modern_reverse_proxy/internal/plugin"
@@ -30,11 +33,16 @@ type Handler struct {
 	Engine          *Engine
 	Metrics         *obs.Metrics
 	Cache           *cache.Cache
+	Inflight        *runtime.InflightTracker
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	recorder := NewResponseRecorder(w)
 	start := time.Now()
+	if h != nil && h.Inflight != nil {
+		h.Inflight.Inc()
+		defer h.Inflight.Dec()
+	}
 
 	requestID := r.Header.Get(RequestIDHeader)
 	if requestID == "" {
@@ -168,13 +176,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap := h.Store.Get()
+	snap := h.Store.Acquire()
 	if snap == nil || snap.Router == nil {
+		if snap != nil {
+			h.Store.Release(snap)
+		}
 		WriteProxyError(recorder, requestID, http.StatusServiceUnavailable, "bad_gateway", "snapshot missing")
 		return
 	}
+	defer h.Store.Release(snap)
 	snapshotVersion = snap.Version
 	snapshotSource = snap.Source
+
+	if enforceRequestLimits(recorder, requestID, r, snap.Limits) {
+		return
+	}
 
 	obs.MarkPhase(r.Context(), "route_match")
 
@@ -371,6 +387,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		applyResponseStreamTimeout(retryResult.Response, snap.Limits.ResponseStreamTimeout)
+
 		cacheable, contentLength := isCacheableResponse(retryResult.Response, cachePolicy)
 		if !cacheable {
 			cacheStatus = "not_cacheable"
@@ -437,7 +455,99 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.applyResponsePlugins(recorder, r, retryResult.Response, route, requestID, pluginTracking) {
 		return
 	}
+	applyResponseStreamTimeout(retryResult.Response, snap.Limits.ResponseStreamTimeout)
 	WriteUpstreamResponse(recorder, retryResult.Response, requestID)
+}
+
+var errBodyTooLarge = errors.New("body too large")
+
+func enforceRequestLimits(recorder *ResponseRecorder, requestID string, request *http.Request, limitConfig limits.Limits) bool {
+	if request == nil {
+		return false
+	}
+	if limitConfig.MaxURLBytes > 0 {
+		uri := request.URL.RequestURI()
+		if len(uri) > limitConfig.MaxURLBytes {
+			WriteProxyError(recorder, requestID, http.StatusRequestURITooLong, "uri_too_long", "uri too long")
+			return true
+		}
+	}
+	if limitConfig.MaxHeaderCount > 0 && len(request.Header) > limitConfig.MaxHeaderCount {
+		WriteProxyError(recorder, requestID, http.StatusRequestHeaderFieldsTooLarge, "headers_too_large", "too many headers")
+		return true
+	}
+	if limitConfig.MaxBodyBytes == 0 {
+		if request.Body != nil && request.Body != http.NoBody {
+			_ = request.Body.Close()
+		}
+		if request.ContentLength != 0 {
+			WriteProxyError(recorder, requestID, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			return true
+		}
+		return false
+	}
+	if limitConfig.MaxBodyBytes > 0 {
+		if request.ContentLength > limitConfig.MaxBodyBytes {
+			WriteProxyError(recorder, requestID, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			return true
+		}
+		if request.ContentLength < 0 {
+			body, err := readBodyWithinLimit(request.Body, limitConfig.MaxBodyBytes)
+			if err != nil {
+				if errors.Is(err, errBodyTooLarge) {
+					WriteProxyError(recorder, requestID, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+					return true
+				}
+				WriteProxyError(recorder, requestID, http.StatusBadRequest, "request_too_large", "request body unreadable")
+				return true
+			}
+			request.Body = io.NopCloser(bytes.NewReader(body))
+			request.ContentLength = int64(len(body))
+		}
+	}
+	return false
+}
+
+func readBodyWithinLimit(body io.ReadCloser, limit int64) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	defer body.Close()
+	if limit <= 0 {
+		return nil, errBodyTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, errBodyTooLarge
+	}
+	return data, nil
+}
+
+type deadlineReadCloser struct {
+	inner    io.ReadCloser
+	deadline time.Time
+}
+
+func (d *deadlineReadCloser) Read(buffer []byte) (int, error) {
+	if time.Now().After(d.deadline) {
+		_ = d.inner.Close()
+		return 0, context.DeadlineExceeded
+	}
+	return d.inner.Read(buffer)
+}
+
+func (d *deadlineReadCloser) Close() error {
+	return d.inner.Close()
+}
+
+func applyResponseStreamTimeout(resp *http.Response, timeout time.Duration) {
+	if resp == nil || resp.Body == nil || timeout <= 0 {
+		return
+	}
+	resp.Body = &deadlineReadCloser{inner: resp.Body, deadline: time.Now().Add(timeout)}
 }
 
 func isCacheEligible(r *http.Request, cachePolicy policy.CachePolicy, cacheLayer *cache.Cache) bool {
