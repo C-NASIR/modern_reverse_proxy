@@ -748,10 +748,6 @@ Apache 2.0
 
 ## Support
 
-- Documentation: https://docs.coherent-proxy.dev
-- Issues: https://github.com/yourorg/coherent-proxy/issues
-- Slack: #coherent-proxy
-
 ## Philosophy
 
 > A proxy becomes reliable when requests are simple and change is safe.
