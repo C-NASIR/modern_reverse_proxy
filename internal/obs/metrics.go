@@ -286,6 +286,35 @@ func (m *Metrics) ObserveRequest(routeID string, poolKey string, status int, dur
 	m.requestWindow.Record(status)
 }
 
+func (m *Metrics) Canonicalize(routeID string, poolKey string) (string, string) {
+	if m == nil {
+		return "none", "none"
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	m.topk.ObserveHit(routeID, poolKey)
+	return m.topk.CanonRoute(routeID), m.topk.CanonPool(poolKey)
+}
+
+func (m *Metrics) ObserveRequestCanonical(canonRoute string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	statusClass := statusClass(status)
+	m.requests.WithLabelValues(canonRoute, statusClass).Inc()
+	m.requestDuration.WithLabelValues(canonRoute).Observe(duration.Seconds())
+	m.requestWindow.Record(status)
+}
+
 func (m *Metrics) ObserveUpstreamRoundTrip(poolKey string, duration time.Duration) {
 	if m == nil {
 		return
@@ -321,6 +350,20 @@ func (m *Metrics) RecordProxyError(routeID string, category string) {
 	}()
 
 	canonRoute := m.topk.CanonRoute(routeID)
+	m.proxyErrors.WithLabelValues(canonRoute, category).Inc()
+}
+
+func (m *Metrics) RecordProxyErrorCanonical(canonRoute string, category string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
 	m.proxyErrors.WithLabelValues(canonRoute, category).Inc()
 }
 
@@ -440,6 +483,20 @@ func (m *Metrics) RecordMTLSReject(routeID string) {
 	m.mtlsReject.WithLabelValues(canonRoute).Inc()
 }
 
+func (m *Metrics) RecordMTLSRejectCanonical(canonRoute string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	m.mtlsReject.WithLabelValues(canonRoute).Inc()
+}
+
 func (m *Metrics) RecordCacheRequest(routeID string, status string) {
 	if m == nil {
 		return
@@ -456,6 +513,23 @@ func (m *Metrics) RecordCacheRequest(routeID string, status string) {
 	m.cacheRequests.WithLabelValues(canonRoute, status).Inc()
 }
 
+func (m *Metrics) RecordCacheRequestCanonical(canonRoute string, status string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	m.cacheRequests.WithLabelValues(canonRoute, status).Inc()
+}
+
 func (m *Metrics) RecordCacheCoalesceBreakaway(routeID string) {
 	if m == nil {
 		return
@@ -469,6 +543,20 @@ func (m *Metrics) RecordCacheCoalesceBreakaway(routeID string) {
 	m.cacheCoalesceBreakaway.WithLabelValues(canonRoute).Inc()
 }
 
+func (m *Metrics) RecordCacheCoalesceBreakawayCanonical(canonRoute string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	m.cacheCoalesceBreakaway.WithLabelValues(canonRoute).Inc()
+}
+
 func (m *Metrics) RecordCacheStoreFail(routeID string) {
 	if m == nil {
 		return
@@ -479,6 +567,20 @@ func (m *Metrics) RecordCacheStoreFail(routeID string) {
 
 	m.topk.ObserveHit(routeID, "")
 	canonRoute := m.topk.CanonRoute(routeID)
+	m.cacheStoreFail.WithLabelValues(canonRoute).Inc()
+}
+
+func (m *Metrics) RecordCacheStoreFailCanonical(canonRoute string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
 	m.cacheStoreFail.WithLabelValues(canonRoute).Inc()
 }
 
@@ -498,6 +600,23 @@ func (m *Metrics) RecordVariantRequest(routeID string, variant string) {
 	m.variantRequests.WithLabelValues(canonRoute, variant).Inc()
 }
 
+func (m *Metrics) RecordVariantRequestCanonical(canonRoute string, variant string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	if variant == "" {
+		variant = "stable"
+	}
+	m.variantRequests.WithLabelValues(canonRoute, variant).Inc()
+}
+
 func (m *Metrics) RecordVariantError(routeID string, variant string) {
 	if m == nil {
 		return
@@ -514,6 +633,23 @@ func (m *Metrics) RecordVariantError(routeID string, variant string) {
 	m.variantErrors.WithLabelValues(canonRoute, variant).Inc()
 }
 
+func (m *Metrics) RecordVariantErrorCanonical(canonRoute string, variant string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
+	if variant == "" {
+		variant = "stable"
+	}
+	m.variantErrors.WithLabelValues(canonRoute, variant).Inc()
+}
+
 func (m *Metrics) RecordOverloadReject(routeID string) {
 	if m == nil {
 		return
@@ -524,6 +660,20 @@ func (m *Metrics) RecordOverloadReject(routeID string) {
 
 	m.topk.ObserveHit(routeID, "")
 	canonRoute := m.topk.CanonRoute(routeID)
+	m.overloadRejects.WithLabelValues(canonRoute).Inc()
+}
+
+func (m *Metrics) RecordOverloadRejectCanonical(canonRoute string) {
+	if m == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+
+	if canonRoute == "" {
+		canonRoute = "none"
+	}
 	m.overloadRejects.WithLabelValues(canonRoute).Inc()
 }
 

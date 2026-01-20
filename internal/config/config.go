@@ -24,11 +24,12 @@ type Route struct {
 }
 
 type Pool struct {
-	Endpoints []string      `json:"endpoints"`
-	Health    HealthConfig  `json:"health"`
-	Breaker   BreakerConfig `json:"breaker"`
-	Outlier   OutlierConfig `json:"outlier"`
-	Overlay   bool          `json:"overlay"`
+	Endpoints []string            `json:"endpoints"`
+	Health    HealthConfig        `json:"health"`
+	Breaker   BreakerConfig       `json:"breaker"`
+	Outlier   OutlierConfig       `json:"outlier"`
+	Transport PoolTransportConfig `json:"transport"`
+	Overlay   bool                `json:"overlay"`
 }
 
 type RoutePolicy struct {
@@ -174,6 +175,12 @@ type HealthConfig struct {
 	HealthyAfterSuccesses  int    `json:"healthy_after_successes"`
 	BaseEjectMS            int    `json:"base_eject_ms"`
 	MaxEjectMS             int    `json:"max_eject_ms"`
+}
+
+type PoolTransportConfig struct {
+	MaxIdlePerHost    int `json:"max_idle_per_host"`
+	MaxConnsPerHost   int `json:"max_conns_per_host"`
+	IdleConnTimeoutMS int `json:"idle_conn_timeout_ms"`
 }
 
 type BreakerConfig struct {

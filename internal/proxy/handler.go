@@ -87,6 +87,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pluginFilters := []string{}
 	pluginTracking := &pluginTracking{}
 	tlsEnabled := r.TLS != nil
+	canonRoute := ""
+	canonObserved := false
 	if r.ContentLength > 0 {
 		bytesIn = r.ContentLength
 	}
@@ -156,17 +158,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if h != nil && h.Metrics != nil {
-			h.Metrics.SetSnapshotInfo(snapshotVersion, snapshotSource)
-			h.Metrics.ObserveRequest(routeID, poolKey, recorder.Status(), duration)
-			if errorCategory != "none" {
-				h.Metrics.RecordProxyError(routeID, errorCategory)
+			if !canonObserved {
+				canonRoute, _ = h.Metrics.Canonicalize(routeID, poolKey)
 			}
-			h.Metrics.RecordVariantRequest(routeID, variantLabel)
+			h.Metrics.SetSnapshotInfo(snapshotVersion, snapshotSource)
+			h.Metrics.ObserveRequestCanonical(canonRoute, recorder.Status(), duration)
+			if errorCategory != "none" {
+				h.Metrics.RecordProxyErrorCanonical(canonRoute, errorCategory)
+			}
+			h.Metrics.RecordVariantRequestCanonical(canonRoute, variantLabel)
 			if proxyError || recorder.Status() >= http.StatusInternalServerError {
-				h.Metrics.RecordVariantError(routeID, variantLabel)
+				h.Metrics.RecordVariantErrorCanonical(canonRoute, variantLabel)
 			}
 			if overloadRejected {
-				h.Metrics.RecordOverloadReject(routeID)
+				h.Metrics.RecordOverloadRejectCanonical(canonRoute)
 			}
 		}
 	}()
@@ -279,6 +284,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteProxyError(recorder, requestID, http.StatusBadGateway, "bad_gateway", "pool config missing")
 		return
 	}
+	if h.Metrics != nil {
+		canonRoute, _ = h.Metrics.Canonicalize(routeID, poolKey)
+		canonObserved = true
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), route.Policy.RequestTimeout)
 	defer cancel()
@@ -318,7 +327,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				cacheMetricStatus = "hit"
 				writeCachedResponse(recorder, entry, requestID, r.Method)
 				if h.Metrics != nil {
-					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+					h.Metrics.RecordCacheRequestCanonical(canonRoute, cacheMetricStatus)
 				}
 				return
 			}
@@ -343,14 +352,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				cacheMetricStatus = "miss"
 				writeCachedResponse(recorder, entry, requestID, r.Method)
 				if h.Metrics != nil {
-					h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+					h.Metrics.RecordCacheRequestCanonical(canonRoute, cacheMetricStatus)
 				}
 				return
 			}
 			if !completed {
 				cacheStatus = "coalesce_breakaway"
 				if h.Metrics != nil {
-					h.Metrics.RecordCacheCoalesceBreakaway(routeID)
+					h.Metrics.RecordCacheCoalesceBreakawayCanonical(canonRoute)
 				}
 			}
 		}
@@ -396,7 +405,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			coalesceResult = false
 			WriteUpstreamResponse(recorder, retryResult.Response, requestID)
 			if h.Metrics != nil {
-				h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+				h.Metrics.RecordCacheRequestCanonical(canonRoute, cacheMetricStatus)
 			}
 			return
 		}
@@ -424,14 +433,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					cacheStatus = "store_failed"
 				}
 				if h.Metrics != nil {
-					h.Metrics.RecordCacheStoreFail(routeID)
+					h.Metrics.RecordCacheStoreFailCanonical(canonRoute)
 				}
 			}
 		}
 
 		writeCachedResponse(recorder, entry, requestID, r.Method)
 		if h.Metrics != nil {
-			h.Metrics.RecordCacheRequest(routeID, cacheMetricStatus)
+			h.Metrics.RecordCacheRequestCanonical(canonRoute, cacheMetricStatus)
 		}
 		return
 	}

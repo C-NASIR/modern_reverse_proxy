@@ -48,7 +48,7 @@ func NewPoolRuntime(key PoolKey, cfg health.Config, drainTimeout time.Duration) 
 	}
 }
 
-func (p *PoolRuntime) Reconcile(endpoints []string, cfg health.Config, drainTimeout time.Duration) {
+func (p *PoolRuntime) Reconcile(endpoints []string, cfg health.Config, drainTimeout time.Duration) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -67,12 +67,15 @@ func (p *PoolRuntime) Reconcile(endpoints []string, cfg health.Config, drainTime
 		p.endpoints[addr] = NewEndpointRuntime(addr, cfg)
 	}
 
+	removed := false
 	for addr, endpoint := range p.endpoints {
 		if _, ok := desired[addr]; ok {
 			continue
 		}
 		endpoint.MarkDraining(drainTimeout)
+		removed = true
 	}
+	return removed
 }
 
 func (p *PoolRuntime) Pick(outlierEjected func(addr string, now time.Time) bool) PickResult {

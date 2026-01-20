@@ -26,6 +26,14 @@ func BuildKey(req *http.Request, cachePolicy policy.CachePolicy) string {
 	}
 
 	var builder strings.Builder
+	baseLen := len(method) + len(host) + len(url) + 12
+	if len(cachePolicy.VaryHeaders) > 0 {
+		baseLen += len(cachePolicy.VaryHeaders) * 16
+	}
+	if baseLen < 64 {
+		baseLen = 64
+	}
+	builder.Grow(baseLen)
 	builder.WriteString("m=")
 	builder.WriteString(method)
 	builder.WriteString("|h=")

@@ -3,12 +3,10 @@ package proxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	"modern_reverse_proxy/internal/breaker"
@@ -21,8 +19,6 @@ import (
 )
 
 type Engine struct {
-	mu         sync.Mutex
-	transports map[string]*http.Transport
 	registry   *registry.Registry
 	retryReg   *registry.RetryRegistry
 	metrics    *obs.Metrics
@@ -31,7 +27,7 @@ type Engine struct {
 }
 
 func NewEngine(reg *registry.Registry, retryReg *registry.RetryRegistry, metrics *obs.Metrics, breakerReg *breaker.Registry, outlierReg *outlier.Registry) *Engine {
-	return &Engine{transports: make(map[string]*http.Transport), registry: reg, retryReg: retryReg, metrics: metrics, breakerReg: breakerReg, outlierReg: outlierReg}
+	return &Engine{registry: reg, retryReg: retryReg, metrics: metrics, breakerReg: breakerReg, outlierReg: outlierReg}
 }
 
 type ForwardResult struct {
@@ -67,7 +63,7 @@ func (e *Engine) roundTripWithRetry(r *http.Request, poolKey pool.PoolKey, stabl
 		return retry.Result{Err: errNoUpstream}, result
 	}
 
-	transport, err := e.transportFor(policy)
+	transport, err := e.transportFor(poolKey)
 	if err != nil {
 		return retry.Result{Err: errTransportUnavailable}, result
 	}
@@ -229,8 +225,8 @@ func writeProxyErrorForResult(w http.ResponseWriter, r *http.Request, requestID 
 	return false
 }
 
-func (e *Engine) RoundTripUpstream(ctx context.Context, req *http.Request, upstreamAddr string, policy policy.Policy) (*http.Response, error) {
-	transport, err := e.transportFor(policy)
+func (e *Engine) RoundTripUpstream(ctx context.Context, req *http.Request, upstreamAddr string, poolKey pool.PoolKey) (*http.Response, error) {
+	transport, err := e.transportFor(poolKey)
 	if err != nil {
 		return nil, err
 	}
@@ -309,32 +305,14 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
-func (e *Engine) transportFor(policy policy.Policy) (*http.Transport, error) {
-	key := fmt.Sprintf("%d/%d", policy.UpstreamDialTimeout.Nanoseconds(), policy.UpstreamResponseHeaderTimeout.Nanoseconds())
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if transport := e.transports[key]; transport != nil {
-		return transport, nil
+func (e *Engine) transportFor(poolKey pool.PoolKey) (*http.Transport, error) {
+	if e == nil || e.registry == nil {
+		return nil, errors.New("registry unavailable")
 	}
-
-	if policy.UpstreamDialTimeout <= 0 || policy.UpstreamResponseHeaderTimeout <= 0 {
-		return nil, errors.New("invalid policy timeouts")
+	transport := e.registry.Transport(poolKey)
+	if transport == nil {
+		return nil, errTransportUnavailable
 	}
-
-	dialer := &net.Dialer{Timeout: policy.UpstreamDialTimeout}
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		ResponseHeaderTimeout: policy.UpstreamResponseHeaderTimeout,
-		IdleConnTimeout:       30 * time.Second,
-		MaxIdleConns:          256,
-		MaxIdleConnsPerHost:   64,
-		ForceAttemptHTTP2:     true,
-	}
-
-	e.transports[key] = transport
 	return transport, nil
 }
 
@@ -387,14 +365,7 @@ func (e *Engine) CloseIdleConnections() {
 	if e == nil {
 		return
 	}
-	e.mu.Lock()
-	transports := make([]*http.Transport, 0, len(e.transports))
-	for _, transport := range e.transports {
-		transports = append(transports, transport)
-	}
-	e.mu.Unlock()
-
-	for _, transport := range transports {
-		transport.CloseIdleConnections()
+	if e.registry != nil {
+		e.registry.CloseIdleConnections()
 	}
 }

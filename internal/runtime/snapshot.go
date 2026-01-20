@@ -22,6 +22,7 @@ import (
 	"modern_reverse_proxy/internal/router"
 	"modern_reverse_proxy/internal/tlsstore"
 	"modern_reverse_proxy/internal/traffic"
+	"modern_reverse_proxy/internal/transport"
 )
 
 type Snapshot struct {
@@ -89,6 +90,8 @@ const (
 	maxPluginFilters                     = 200
 	defaultPluginBreakerConsecutiveFails = 5
 	defaultPluginBreakerHalfOpenProbes   = 3
+	defaultPoolMaxIdlePerHost            = 256
+	defaultPoolIdleConnTimeout           = 90 * time.Second
 )
 
 var (
@@ -128,6 +131,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 
 	pools := make(map[string]pool.PoolKey, len(cfg.Pools))
 	poolConfigs := make(map[string]PoolConfig, len(cfg.Pools))
+	desiredPools := make(map[pool.PoolKey]struct{}, len(cfg.Pools))
 	for name, poolCfg := range cfg.Pools {
 		if len(poolCfg.Endpoints) == 0 {
 			return nil, fmt.Errorf("pool %q has no endpoints", name)
@@ -145,7 +149,13 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 			MaxEjectDuration:       durationOrDefault(poolCfg.Health.MaxEjectMS, defaultMaxEject),
 		}
 
-		reg.Reconcile(poolKey, poolCfg.Endpoints, healthCfg)
+		transportOpts := transport.Options{
+			MaxIdleConnsPerHost: intOrDefault(poolCfg.Transport.MaxIdlePerHost, defaultPoolMaxIdlePerHost),
+			MaxConnsPerHost:     nonNegative(poolCfg.Transport.MaxConnsPerHost),
+			IdleConnTimeout:     durationOrDefault(poolCfg.Transport.IdleConnTimeoutMS, defaultPoolIdleConnTimeout),
+		}
+		reg.Reconcile(poolKey, poolCfg.Endpoints, healthCfg, transportOpts)
+		desiredPools[poolKey] = struct{}{}
 
 		poolConfigs[name] = PoolConfig{
 			Breaker: breaker.Config{
@@ -174,6 +184,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 			},
 		}
 	}
+	reg.PrunePools(desiredPools)
 
 	seenIDs := make(map[string]struct{}, len(cfg.Routes))
 	filterNames := make(map[string]struct{})

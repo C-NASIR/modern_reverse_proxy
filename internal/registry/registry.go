@@ -2,11 +2,13 @@ package registry
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
 	"modern_reverse_proxy/internal/health"
 	"modern_reverse_proxy/internal/pool"
+	"modern_reverse_proxy/internal/transport"
 )
 
 const (
@@ -17,6 +19,7 @@ const (
 type Registry struct {
 	mu           sync.RWMutex
 	pools        map[pool.PoolKey]*pool.PoolRuntime
+	transports   *transport.Registry
 	reapInterval time.Duration
 	drainTimeout time.Duration
 	stopCh       chan struct{}
@@ -32,6 +35,7 @@ func NewRegistry(reapInterval time.Duration, drainTimeout time.Duration) *Regist
 
 	reg := &Registry{
 		pools:        make(map[pool.PoolKey]*pool.PoolRuntime),
+		transports:   transport.NewRegistry(0, 0),
 		reapInterval: reapInterval,
 		drainTimeout: drainTimeout,
 		stopCh:       make(chan struct{}),
@@ -40,7 +44,7 @@ func NewRegistry(reapInterval time.Duration, drainTimeout time.Duration) *Regist
 	return reg
 }
 
-func (r *Registry) Reconcile(key pool.PoolKey, endpoints []string, cfg health.Config) {
+func (r *Registry) Reconcile(key pool.PoolKey, endpoints []string, cfg health.Config, transportOpts transport.Options) {
 	r.mu.Lock()
 	poolRuntime := r.pools[key]
 	if poolRuntime == nil {
@@ -49,7 +53,13 @@ func (r *Registry) Reconcile(key pool.PoolKey, endpoints []string, cfg health.Co
 	}
 	r.mu.Unlock()
 
-	poolRuntime.Reconcile(endpoints, cfg, r.drainTimeout)
+	endpointRemoved := poolRuntime.Reconcile(endpoints, cfg, r.drainTimeout)
+	if r.transports != nil {
+		r.transports.Reconcile(string(key), endpoints, transportOpts)
+		if endpointRemoved {
+			r.transports.CloseIdleConnections(string(key))
+		}
+	}
 }
 
 func (r *Registry) Pick(key pool.PoolKey, outlierEjected func(addr string, now time.Time) bool) (pool.PickResult, bool) {
@@ -95,6 +105,9 @@ func (r *Registry) Close() {
 	default:
 		close(r.stopCh)
 	}
+	if r.transports != nil {
+		r.transports.Stop()
+	}
 }
 
 func (r *Registry) Stop(ctx context.Context) error {
@@ -103,6 +116,9 @@ func (r *Registry) Stop(ctx context.Context) error {
 		return nil
 	}
 	r.Close()
+	if r.transports != nil {
+		r.transports.CloseAll()
+	}
 	r.mu.RLock()
 	pools := make([]*pool.PoolRuntime, 0, len(r.pools))
 	for _, poolRuntime := range r.pools {
@@ -120,6 +136,73 @@ func (r *Registry) getPool(key pool.PoolKey) *pool.PoolRuntime {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.pools[key]
+}
+
+func (r *Registry) Transport(poolKey pool.PoolKey) *http.Transport {
+	if r == nil || r.transports == nil {
+		return nil
+	}
+	return r.transports.Get(string(poolKey))
+}
+
+func (r *Registry) HasTransport(poolKey pool.PoolKey) bool {
+	if r == nil || r.transports == nil {
+		return false
+	}
+	return r.transports.Has(string(poolKey))
+}
+
+func (r *Registry) CloseIdleConnections() {
+	if r == nil || r.transports == nil {
+		return
+	}
+	r.transports.CloseIdleConnectionsAll()
+}
+
+func (r *Registry) SetTransportTTL(ttl time.Duration) {
+	if r == nil || r.transports == nil {
+		return
+	}
+	r.transports.SetTTL(ttl)
+}
+
+func (r *Registry) ReapTransportsNow() {
+	if r == nil || r.transports == nil {
+		return
+	}
+	r.transports.ReapNow()
+}
+
+func (r *Registry) PrunePools(desired map[pool.PoolKey]struct{}) {
+	if r == nil {
+		return
+	}
+	if desired == nil {
+		desired = map[pool.PoolKey]struct{}{}
+	}
+
+	var removed []*pool.PoolRuntime
+	var removedKeys []pool.PoolKey
+
+	r.mu.Lock()
+	for key, poolRuntime := range r.pools {
+		if _, ok := desired[key]; ok {
+			continue
+		}
+		removed = append(removed, poolRuntime)
+		removedKeys = append(removedKeys, key)
+		delete(r.pools, key)
+	}
+	r.mu.Unlock()
+
+	for _, poolRuntime := range removed {
+		poolRuntime.Stop()
+	}
+	if r.transports != nil {
+		for _, key := range removedKeys {
+			r.transports.Remove(string(key))
+		}
+	}
 }
 
 func (r *Registry) endpoint(key pool.PoolKey, addr string) *pool.EndpointRuntime {
