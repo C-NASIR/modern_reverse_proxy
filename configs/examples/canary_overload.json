@@ -1,0 +1,43 @@
+{
+  "routes": [
+    {
+      "id": "canary",
+      "host": "localhost",
+      "path_prefix": "/",
+      "pool": "primary",
+      "policy": {
+        "traffic": {
+          "enabled": true,
+          "stable_pool": "primary",
+          "canary_pool": "canary",
+          "stable_weight": 90,
+          "canary_weight": 10,
+          "overload": {
+            "enabled": true,
+            "max_inflight": 10,
+            "max_queue": 20,
+            "queue_timeout_ms": 50
+          }
+        }
+      }
+    }
+  ],
+  "pools": {
+    "primary": {
+      "endpoints": ["upstream_a:8081"],
+      "health": {
+        "path": "/",
+        "interval_ms": 2000,
+        "timeout_ms": 1000
+      }
+    },
+    "canary": {
+      "endpoints": ["upstream_b:8082"],
+      "health": {
+        "path": "/",
+        "interval_ms": 2000,
+        "timeout_ms": 1000
+      }
+    }
+  }
+}

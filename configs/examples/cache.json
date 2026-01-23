@@ -1,0 +1,30 @@
+{
+  "routes": [
+    {
+      "id": "cache",
+      "host": "localhost",
+      "path_prefix": "/",
+      "pool": "primary",
+      "policy": {
+        "cache": {
+          "enabled": true,
+          "public": true,
+          "ttl_ms": 5000,
+          "max_object_bytes": 65536,
+          "coalesce_enabled": true,
+          "coalesce_timeout_ms": 200
+        }
+      }
+    }
+  ],
+  "pools": {
+    "primary": {
+      "endpoints": ["upstream_a:8081"],
+      "health": {
+        "path": "/",
+        "interval_ms": 2000,
+        "timeout_ms": 1000
+      }
+    }
+  }
+}

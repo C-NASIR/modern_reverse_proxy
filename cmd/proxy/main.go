@@ -4,10 +4,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"modern_reverse_proxy/internal/admin"
@@ -31,16 +36,24 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatalf("usage: %s <config.json>", os.Args[0])
-	}
-	data, err := os.ReadFile(os.Args[1])
+	configFile := flag.String("config-file", "", "Path to JSON config")
+	httpAddr := flag.String("http-addr", ":8080", "HTTP listen address")
+	tlsAddr := flag.String("tls-addr", "", "TLS listen address (empty disables TLS)")
+	adminAddr := flag.String("admin-addr", ":9000", "Admin listen address")
+	enableAdmin := flag.Bool("enable-admin", true, "Enable admin listener")
+	enablePull := flag.Bool("enable-pull", false, "Enable pull mode")
+	pullURL := flag.String("pull-url", "", "Pull mode base URL")
+	pullIntervalMS := flag.Int("pull-interval-ms", 5000, "Pull mode interval in ms")
+	publicKeyFile := flag.String("public-key-file", "", "Public key file for signed bundles")
+	adminToken := flag.String("admin-token", "", "Admin API token")
+	logJSON := flag.Bool("log-json", true, "Emit JSON logs")
+	flag.Parse()
+
+	configureLogging(*logJSON)
+
+	cfg, err := loadConfig(*configFile)
 	if err != nil {
-		log.Fatalf("read config: %v", err)
-	}
-	cfg, err := config.ParseJSON(data)
-	if err != nil {
-		log.Fatalf("parse config: %v", err)
+		log.Fatalf("load config: %v", err)
 	}
 	reg := registry.NewRegistry(0, 0)
 	retryReg := registry.NewRetryRegistry(0, 0)
@@ -51,7 +64,7 @@ func main() {
 	trafficReg := traffic.NewRegistry(0, 0)
 	pluginReg := plugin.NewRegistry(0)
 
-	publicKey, err := loadPublicKey()
+	publicKey, err := loadPublicKey(*publicKeyFile)
 	if err != nil {
 		log.Fatalf("public key: %v", err)
 	}
@@ -71,14 +84,17 @@ func main() {
 	cacheCoalescer := cache.NewCoalescer(cache.DefaultMaxFlights)
 	cacheLayer := cache.NewCache(cacheStore, cacheCoalescer)
 	adminProvider := provider.NewAdminPush()
-	fileProvider := provider.NewFileProvider(os.Args[1])
+	providers := []provider.Provider{adminProvider}
+	if *configFile != "" {
+		providers = append(providers, provider.NewFileProvider(*configFile))
+	}
 	applyManager := apply.NewManager(apply.ManagerConfig{
 		Store:           store,
 		Registry:        reg,
 		BreakerRegistry: breakerReg,
 		OutlierRegistry: outlierReg,
 		TrafficRegistry: trafficReg,
-		Providers:       []provider.Provider{fileProvider, adminProvider},
+		Providers:       providers,
 		AdminProvider:   adminProvider,
 		Pressure:        runtime.NewPressure(store),
 	})
@@ -108,26 +124,23 @@ func main() {
 	mux.Handle("/metrics", metrics.Handler())
 	mux.Handle("/", handler)
 
-	listenAddr := cfg.ListenAddr
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1:8080"
-	}
-
 	var tlsBaseConfig *tls.Config
 	if snap.TLSEnabled {
 		tlsBaseConfig = server.BaseTLSConfig(store)
 	}
 
 	stoppers := []server.Stopper{reg, retryReg, breakerReg, outlierReg, trafficReg, pluginReg}
-	pullURL := os.Getenv("PULL_URL")
-	if pullURL != "" {
+	if *enablePull {
+		if *pullURL == "" {
+			log.Fatalf("pull-url is required when pull mode is enabled")
+		}
 		if len(publicKey) == 0 {
-			log.Fatalf("PUBLIC_KEY_FILE is required for pull mode")
+			log.Fatalf("public-key-file is required for pull mode")
 		}
 		puller := pull.NewPuller(pull.Config{
 			Enabled:        true,
-			BaseURL:        pullURL,
-			Interval:       parseDurationMS(os.Getenv("PULL_INTERVAL_MS"), 5*time.Second),
+			BaseURL:        *pullURL,
+			Interval:       time.Duration(*pullIntervalMS) * time.Millisecond,
 			Jitter:         parseDurationMS(os.Getenv("PULL_JITTER_MS"), 500*time.Millisecond),
 			PublicKey:      publicKey,
 			RolloutManager: rolloutManager,
@@ -142,7 +155,7 @@ func main() {
 		go puller.Run(pullCtx)
 	}
 
-	serverHandle, err := server.StartServers(mux, tlsBaseConfig, listenAddr, snap.TLSAddr, server.Options{
+	serverHandle, err := server.StartServers(mux, tlsBaseConfig, *httpAddr, *tlsAddr, server.Options{
 		Limits:   snap.Limits,
 		Shutdown: shutdownConfig,
 		Inflight: inflight,
@@ -161,58 +174,133 @@ func main() {
 		log.Printf("listening on https://%s", serverHandle.TLSAddr)
 	}
 
-	adminAddr := os.Getenv("ADMIN_LISTEN_ADDR")
-	if adminAddr != "" {
-		adminToken := os.Getenv("ADMIN_TOKEN")
-		adminCert := os.Getenv("ADMIN_CERT_FILE")
-		adminKey := os.Getenv("ADMIN_KEY_FILE")
-		adminCA := os.Getenv("ADMIN_CLIENT_CA_FILE")
-		allowUnsigned := os.Getenv("ALLOW_UNSIGNED_ADMIN_CONFIG") == "true"
-		if adminToken == "" {
-			log.Fatalf("ADMIN_TOKEN is required for admin listener")
-		}
-		if adminCA == "" {
-			log.Fatalf("ADMIN_CLIENT_CA_FILE is required for admin listener")
-		}
-		auth, err := admin.NewAuthenticator(admin.AuthConfig{Token: adminToken, ClientCAFile: adminCA})
-		if err != nil {
-			log.Fatalf("admin auth: %v", err)
-		}
-		adminTLS, err := admin.TLSConfig(adminCert, adminKey, adminCA)
-		if err != nil {
-			log.Fatalf("admin tls: %v", err)
-		}
-		adminHandler := admin.NewHandler(admin.HandlerConfig{
-			Store:          store,
-			ApplyManager:   applyManager,
-			Auth:           auth,
-			RateLimiter:    admin.NewRateLimiter(admin.RateLimitConfig{}),
-			AdminStore:     admin.NewStore(),
-			PublicKey:      publicKey,
-			AllowUnsigned:  allowUnsigned,
-			RolloutManager: rolloutManager,
-		})
-		adminServer, err := server.StartServers(adminHandler, adminTLS, "", adminAddr, server.Options{
-			Limits:   limits.Default(),
-			Shutdown: runtime.DefaultShutdownConfig(),
-		})
-		if err != nil {
-			log.Fatalf("start admin server: %v", err)
-		}
-		if adminServer.TLSAddr != "" {
-			log.Printf("admin listening on https://%s", adminServer.TLSAddr)
-		}
+	if err := startAdmin(*enableAdmin, *adminAddr, *adminToken, store, applyManager, publicKey, rolloutManager); err != nil {
+		log.Fatalf("admin: %v", err)
 	}
 
 	select {}
 }
 
-func loadPublicKey() (ed25519.PublicKey, error) {
-	path := os.Getenv("PUBLIC_KEY_FILE")
+func loadPublicKey(path string) (ed25519.PublicKey, error) {
+	if path == "" {
+		path = os.Getenv("PUBLIC_KEY_FILE")
+	}
 	if path == "" {
 		return nil, nil
 	}
 	return bundle.LoadPublicKey(path)
+}
+
+func loadConfig(path string) (*config.Config, error) {
+	if path == "" {
+		return &config.Config{}, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return config.ParseJSON(data)
+}
+
+func startAdmin(enabled bool, addr string, token string, store *runtime.Store, applyManager *apply.Manager, publicKey ed25519.PublicKey, rolloutManager *rollout.Manager) error {
+	if !enabled {
+		return nil
+	}
+	if addr == "" {
+		return errors.New("admin-addr is required when admin is enabled")
+	}
+	adminToken := token
+	if adminToken == "" {
+		adminToken = os.Getenv("ADMIN_TOKEN")
+	}
+	adminCert := envOrFallback("ADMIN_TLS_CERT_FILE", "ADMIN_CERT_FILE")
+	adminKey := envOrFallback("ADMIN_TLS_KEY_FILE", "ADMIN_KEY_FILE")
+	adminCA := strings.TrimSpace(os.Getenv("ADMIN_CLIENT_CA_FILE"))
+	allowUnsigned := os.Getenv("ALLOW_UNSIGNED_ADMIN_CONFIG") == "true"
+	if adminToken == "" {
+		return errors.New("ADMIN_TOKEN is required for admin listener")
+	}
+	if adminCert == "" || adminKey == "" {
+		return errors.New("ADMIN_TLS_CERT_FILE and ADMIN_TLS_KEY_FILE are required for admin listener")
+	}
+	if adminCA == "" {
+		return errors.New("ADMIN_CLIENT_CA_FILE is required for admin listener")
+	}
+	auth, err := admin.NewAuthenticator(admin.AuthConfig{Token: adminToken, ClientCAFile: adminCA})
+	if err != nil {
+		return err
+	}
+	adminTLS, err := admin.TLSConfig(adminCert, adminKey, adminCA)
+	if err != nil {
+		return err
+	}
+	adminHandler := admin.NewHandler(admin.HandlerConfig{
+		Store:          store,
+		ApplyManager:   applyManager,
+		Auth:           auth,
+		RateLimiter:    admin.NewRateLimiter(admin.RateLimitConfig{}),
+		AdminStore:     admin.NewStore(),
+		PublicKey:      publicKey,
+		AllowUnsigned:  allowUnsigned,
+		RolloutManager: rolloutManager,
+	})
+	adminServer, err := server.StartServers(adminHandler, adminTLS, "", addr, server.Options{
+		Limits:   limits.Default(),
+		Shutdown: runtime.DefaultShutdownConfig(),
+	})
+	if err != nil {
+		return err
+	}
+	if adminServer.TLSAddr != "" {
+		log.Printf("admin listening on https://%s", adminServer.TLSAddr)
+	}
+	return nil
+}
+
+func envOrFallback(primary string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(primary))
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv(fallback))
+	}
+	return value
+}
+
+func configureLogging(jsonEnabled bool) {
+	if !jsonEnabled {
+		log.SetFlags(log.LstdFlags)
+		return
+	}
+	log.SetFlags(0)
+	log.SetOutput(&jsonLogWriter{writer: os.Stdout})
+}
+
+type jsonLogWriter struct {
+	writer io.Writer
+}
+
+func (j *jsonLogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	if msg == "" {
+		return len(p), nil
+	}
+	entry := map[string]string{
+		"ts":  time.Now().UTC().Format(time.RFC3339Nano),
+		"msg": msg,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		_, writeErr := j.writer.Write(p)
+		if writeErr != nil {
+			return len(p), writeErr
+		}
+		return len(p), err
+	}
+	data = append(data, '\n')
+	_, writeErr := j.writer.Write(data)
+	if writeErr != nil {
+		return len(p), writeErr
+	}
+	return len(p), nil
 }
 
 func parseDurationMS(value string, fallback time.Duration) time.Duration {

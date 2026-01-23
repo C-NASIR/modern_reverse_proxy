@@ -1,0 +1,40 @@
+{
+  "routes": [
+    {
+      "id": "plugins",
+      "host": "localhost",
+      "path_prefix": "/",
+      "pool": "primary",
+      "policy": {
+        "plugins": {
+          "enabled": true,
+          "filters": [
+            {
+              "name": "demo-filter",
+              "addr": "127.0.0.1:7000",
+              "request_timeout_ms": 50,
+              "response_timeout_ms": 50,
+              "failure_mode": "fail_open",
+              "breaker": {
+                "enabled": true,
+                "consecutive_failures": 3,
+                "open_ms": 2000,
+                "half_open_probes": 2
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "pools": {
+    "primary": {
+      "endpoints": ["upstream_a:8081"],
+      "health": {
+        "path": "/",
+        "interval_ms": 2000,
+        "timeout_ms": 1000
+      }
+    }
+  }
+}

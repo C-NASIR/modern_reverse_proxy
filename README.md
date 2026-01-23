@@ -102,107 +102,55 @@ Upstream Services
 
 ## Quick Start
 
-### Installation
+### Build
 
 ```bash
-go install github.com/yourorg/coherent-proxy/cmd/proxy@latest
+go build -o ./bin/proxy ./cmd/proxy
 ```
 
-### Basic Configuration
-
-Create `config.yaml`:
-
-```yaml
-version: v1
-
-listeners:
-  - address: ":8080"
-    protocol: http
-    read_timeout: 30s
-    write_timeout: 30s
-
-routes:
-  - id: api-route
-    host: api.example.com
-    path_prefix: /v1
-    pool: api-pool
-    policy:
-      timeout: 5s
-      retries:
-        max_attempts: 3
-        budget_percent: 10
-      rate_limit:
-        requests_per_second: 1000
-
-pools:
-  - id: api-pool
-    endpoints:
-      - address: 10.0.1.10:8000
-      - address: 10.0.1.11:8000
-    balancer: round_robin
-    health:
-      active:
-        interval: 5s
-        path: /healthz
-      passive:
-        consecutive_failures: 5
-```
-
-### Run the Proxy
+### Run with Docker Compose
 
 ```bash
-# Start with file config
-proxy --config config.yaml
+./scripts/gen-certs.sh
+docker compose up -d --build
+curl http://localhost:8080/
+```
 
-# Start with dynamic config from admin API
-proxy --admin :9090 --static-config static.yaml
+### Run Locally
+
+```bash
+ADMIN_TOKEN=devtoken \
+ADMIN_TLS_CERT_FILE=./secrets/admin-cert.pem \
+ADMIN_TLS_KEY_FILE=./secrets/admin-key.pem \
+ADMIN_CLIENT_CA_FILE=./secrets/admin-ca.pem \
+./bin/proxy -config-file configs/examples/basic.json -http-addr :8080 -admin-addr :9000
 ```
 
 ### Send Traffic
 
 ```bash
-curl -H "Host: api.example.com" http://localhost:8080/v1/users
+curl http://localhost:8080/
 ```
 
 ## Configuration
 
-### Static Configuration
+The proxy reads JSON configs describing routes, pools, and per-route policy. See `docs/CONFIG.md` and the examples in `configs/examples` for full details.
 
-Defines the process itself. Rare changes, may require restart.
+Operational workflow and admin API usage are in `docs/RUNBOOK.md`.
 
-```yaml
-# Listen addresses
-http_address: ":8080"
-https_address: ":8443"
-admin_address: ":9090"
+## CLI Flags
 
-# Base timeouts
-read_header_timeout: 5s
-idle_timeout: 90s
-
-# Observability
-logging:
-  level: info
-  format: json
-metrics:
-  exporter: prometheus
-  address: ":9091"
-```
-
-### Dynamic Configuration
-
-Defines traffic behavior. Frequent changes, always zero-downtime.
-
-```yaml
-version: v1
-signature: <base64-signature>
-
-routes: [...]
-pools: [...]
-policies: [...]
-middleware: [...]
-certificates: [...]
-```
+- `-config-file`: JSON config path (optional).
+- `-http-addr`: data plane HTTP address (default `:8080`).
+- `-tls-addr`: data plane TLS address (empty disables TLS).
+- `-admin-addr`: admin listener address (default `:9000`).
+- `-enable-admin`: toggle admin listener (default `true`).
+- `-enable-pull`: toggle pull mode (default `false`).
+- `-pull-url`: base URL for pull mode.
+- `-pull-interval-ms`: pull poll interval in milliseconds.
+- `-public-key-file`: public key for signed bundle verification.
+- `-admin-token`: admin bearer token (or `ADMIN_TOKEN`).
+- `-log-json`: emit JSON logs (default `true`).
 
 ## Components
 

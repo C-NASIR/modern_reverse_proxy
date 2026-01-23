@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  proxy:
+    build: .
+    depends_on:
+      - upstream_a
+      - upstream_b
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ./configs/examples:/configs:ro
+      - ./secrets:/secrets:ro
+    environment:
+      - ADMIN_TOKEN=devtoken
+      - ADMIN_TLS_CERT_FILE=/secrets/admin-cert.pem
+      - ADMIN_TLS_KEY_FILE=/secrets/admin-key.pem
+      - ADMIN_CLIENT_CA_FILE=/secrets/admin-ca.pem
+    command:
+      - -config-file
+      - /configs/basic.json
+      - -http-addr
+      - :8080
+      - -admin-addr
+      - :9000
+      - -enable-admin=true
+
+  upstream_a:
+    image: hashicorp/http-echo
+    command: ["-text=upstream_a", "-listen=:8081"]
+
+  upstream_b:
+    image: hashicorp/http-echo
+    command: ["-text=upstream_b", "-listen=:8082"]

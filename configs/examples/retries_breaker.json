@@ -1,0 +1,40 @@
+{
+  "routes": [
+    {
+      "id": "retries",
+      "host": "localhost",
+      "path_prefix": "/",
+      "pool": "primary",
+      "policy": {
+        "retry": {
+          "enabled": true,
+          "max_attempts": 3,
+          "per_try_timeout_ms": 200,
+          "retry_on_status": [502, 503, 504],
+          "backoff_ms": 50,
+          "backoff_jitter_ms": 20
+        }
+      }
+    }
+  ],
+  "pools": {
+    "primary": {
+      "endpoints": ["upstream_a:8081", "upstream_dead:9999"],
+      "health": {
+        "path": "/",
+        "interval_ms": 1500,
+        "timeout_ms": 1000,
+        "unhealthy_after_failures": 2,
+        "healthy_after_successes": 1
+      },
+      "breaker": {
+        "enabled": true,
+        "failure_rate_threshold_percent": 50,
+        "minimum_requests": 10,
+        "evaluation_window_ms": 10000,
+        "open_ms": 5000,
+        "half_open_max_probes": 3
+      }
+    }
+  }
+}
