@@ -1,4 +1,4 @@
-# Introduction (THIS PROJECT IS IN DEVELOPMENT. 70% FINISHED)
+# Introduction
 
 A production-ready reverse proxy built around one principle: **every request executes against a coherent immutable snapshot, and all change happens by building a new snapshot atomically**.
 
