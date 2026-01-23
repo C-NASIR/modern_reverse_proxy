@@ -61,6 +61,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx = WithRequestID(ctx, requestID)
 	r = r.WithContext(ctx)
 
+	logPath := r.URL.Path
+	if r.URL.RawQuery != "" {
+		logPath = r.URL.Path + "?" + r.URL.RawQuery
+	}
+	redactQuery := false
 	routeID := "none"
 	poolKey := "none"
 	upstreamAddr := "none"
@@ -120,7 +125,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RequestID:            requestID,
 			Method:               r.Method,
 			Host:                 r.Host,
-			Path:                 r.URL.Path,
+			Path:                 logPath,
 			RouteID:              routeID,
 			PoolKey:              poolKey,
 			UpstreamAddr:         upstreamAddr,
@@ -192,6 +197,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.Store.Release(snap)
 	snapshotVersion = snap.Version
 	snapshotSource = snap.Source
+	redactQuery = snap.Logging.RedactQuery
+	if redactQuery {
+		logPath = r.URL.Path
+	}
 
 	if enforceRequestLimits(recorder, requestID, r, snap.Limits) {
 		return

@@ -38,6 +38,7 @@ type Snapshot struct {
 	Source      string
 	RouteCount  int
 	Limits      limits.Limits
+	Logging     config.LoggingConfig
 	refCount    atomic.Int64
 	retiredAt   atomic.Int64
 }
@@ -392,6 +393,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 		Source:      "file",
 		RouteCount:  len(routes),
 		Limits:      limitConfig,
+		Logging:     cfg.Logging,
 	}
 	success = true
 	return snapshot, nil

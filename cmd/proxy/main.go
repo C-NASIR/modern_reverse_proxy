@@ -120,8 +120,17 @@ func main() {
 		Inflight:        inflight,
 	}
 
+	metricsEndpoint := resolveMetricsConfig(cfg)
+	metricsHandler := metrics.Handler()
+	if metricsEndpoint.requireToken {
+		metricsToken := os.Getenv(metricsEndpoint.tokenEnv)
+		metricsHandler = server.RequireBearerToken(metricsHandler, true, metricsToken)
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", metrics.Handler())
+	if metricsEndpoint.enabled {
+		mux.Handle(metricsEndpoint.path, metricsHandler)
+	}
 	mux.Handle("/", handler)
 
 	var tlsBaseConfig *tls.Config
@@ -323,4 +332,34 @@ func parseFloatEnv(value string, fallback float64) float64 {
 		return fallback
 	}
 	return parsed
+}
+
+type metricsEndpointConfig struct {
+	enabled      bool
+	path         string
+	requireToken bool
+	tokenEnv     string
+}
+
+func resolveMetricsConfig(cfg *config.Config) metricsEndpointConfig {
+	endpoint := metricsEndpointConfig{
+		enabled:      true,
+		path:         "/metrics",
+		requireToken: false,
+		tokenEnv:     "METRICS_TOKEN",
+	}
+	if cfg == nil || cfg.Metrics == nil {
+		return endpoint
+	}
+	if cfg.Metrics.Enabled != nil {
+		endpoint.enabled = *cfg.Metrics.Enabled
+	}
+	if cfg.Metrics.Path != "" {
+		endpoint.path = cfg.Metrics.Path
+	}
+	endpoint.requireToken = cfg.Metrics.RequireToken
+	if cfg.Metrics.TokenEnv != "" {
+		endpoint.tokenEnv = cfg.Metrics.TokenEnv
+	}
+	return endpoint
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,4 +242,36 @@ func (s *Server) closeServers() {
 	if s.tlsServer != nil {
 		_ = s.tlsServer.Close()
 	}
+}
+
+func RequireBearerToken(handler http.Handler, requireToken bool, token string) http.Handler {
+	if !requireToken {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok || provided == "" || token == "" || provided != token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if handler != nil {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+}
+
+func bearerToken(header string) (string, bool) {
+	if header == "" {
+		return "", false
+	}
+	parts := strings.Fields(header)
+	if len(parts) != 2 {
+		return "", false
+	}
+	if !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	return parts[1], true
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -105,4 +106,23 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func RedactHeaderValue(name, value string) string {
+	if name == "" {
+		return value
+	}
+	if isSensitiveHeader(name) {
+		return "[redacted]"
+	}
+	return value
+}
+
+func isSensitiveHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization":
+		return true
+	default:
+		return false
+	}
 }

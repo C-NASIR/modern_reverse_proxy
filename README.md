@@ -138,6 +138,15 @@ The proxy reads JSON configs describing routes, pools, and per-route policy. See
 
 Operational workflow and admin API usage are in `docs/RUNBOOK.md`.
 
+Production readiness references:
+
+- `docs/THREAT_MODEL.md`
+- `docs/SECURITY_CHECKLIST.md`
+- `docs/SLO_ALERTS.md`
+- `docs/PLAYBOOKS.md`
+
+Metrics exposure can be disabled or protected via the `metrics` config section (`enabled`, `path`, `require_token`, `token_env`).
+
 ## CLI Flags
 
 - `-config-file`: JSON config path (optional).

@@ -9,6 +9,8 @@ type Config struct {
 	TLS        TLSConfig       `json:"tls"`
 	Limits     LimitsConfig    `json:"limits"`
 	Shutdown   ShutdownConfig  `json:"shutdown"`
+	Logging    LoggingConfig   `json:"logging"`
+	Metrics    *MetricsConfig  `json:"metrics"`
 	Routes     []Route         `json:"routes"`
 	Pools      map[string]Pool `json:"pools"`
 }
@@ -77,6 +79,17 @@ type ShutdownConfig struct {
 	DrainMS           int `json:"drain_ms"`
 	GracefulTimeoutMS int `json:"graceful_timeout_ms"`
 	ForceCloseMS      int `json:"force_close_ms"`
+}
+
+type LoggingConfig struct {
+	RedactQuery bool `json:"redact_query"`
+}
+
+type MetricsConfig struct {
+	Enabled      *bool  `json:"enabled"`
+	Path         string `json:"path"`
+	RequireToken bool   `json:"require_token"`
+	TokenEnv     string `json:"token_env"`
 }
 
 type RetryConfig struct {
