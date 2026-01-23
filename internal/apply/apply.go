@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"time"
 
 	"modern_reverse_proxy/internal/breaker"
@@ -67,6 +68,7 @@ type Result struct {
 	Snapshot *runtime.Snapshot
 	Version  string
 	Config   *config.Config
+	Warnings []string
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -112,6 +114,9 @@ func (m *Manager) Apply(ctx context.Context, raw []byte, source string, mode Mod
 	if err != nil {
 		return nil, err
 	}
+	if err := config.ValidateMetricsToken(cfg); err != nil {
+		return nil, err
+	}
 	version := configVersion(raw)
 
 	var previous *config.Config
@@ -144,7 +149,7 @@ func (m *Manager) Apply(ctx context.Context, raw []byte, source string, mode Mod
 	}
 
 	providers := m.buildProviders(cfg)
-	compiled, resolvedCfg, err := m.compile(ctx, providers, reg, breakerReg, outlierReg, trafficReg)
+	compiled, resolvedCfg, warnings, err := m.compile(ctx, providers, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		metrics := obs.DefaultMetrics()
 		if metrics != nil {
@@ -167,7 +172,8 @@ func (m *Manager) Apply(ctx context.Context, raw []byte, source string, mode Mod
 		}
 	}
 
-	return &Result{Snapshot: compiled, Version: version, Config: resolvedCfg}, nil
+	logValidationWarnings(warnings)
+	return &Result{Snapshot: compiled, Version: version, Config: resolvedCfg, Warnings: warnings}, nil
 }
 
 func (m *Manager) buildProviders(cfg *config.Config) []provider.Provider {
@@ -216,4 +222,13 @@ func containsProvider(list []provider.Provider, target provider.Provider) bool {
 		}
 	}
 	return false
+}
+
+func logValidationWarnings(warnings []string) {
+	for _, warning := range warnings {
+		if warning == "" {
+			continue
+		}
+		log.Printf("config_warning=%s", warning)
+	}
 }

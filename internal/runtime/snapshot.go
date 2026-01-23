@@ -26,6 +26,7 @@ import (
 )
 
 type Snapshot struct {
+	ID          uint64
 	Router      *router.Router
 	Pools       map[string]pool.PoolKey
 	PoolConfigs map[string]PoolConfig
@@ -98,6 +99,7 @@ const (
 var (
 	defaultRetryStatuses = []int{502, 503, 504}
 	defaultRetryErrors   = []string{"dial", "timeout"}
+	snapshotIDCounter    atomic.Uint64
 )
 
 func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry, trafficReg *traffic.Registry) (*Snapshot, error) {
@@ -381,6 +383,7 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 	}
 
 	snapshot := &Snapshot{
+		ID:          nextSnapshotID(),
 		Router:      compiled,
 		Pools:       pools,
 		PoolConfigs: poolConfigs,
@@ -397,6 +400,10 @@ func BuildSnapshot(cfg *config.Config, reg *registry.Registry, breakerReg *break
 	}
 	success = true
 	return snapshot, nil
+}
+
+func nextSnapshotID() uint64 {
+	return snapshotIDCounter.Add(1)
 }
 
 func durationOrDefault(ms int, fallback time.Duration) time.Duration {

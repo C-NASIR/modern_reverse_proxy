@@ -24,16 +24,17 @@ import (
 )
 
 type Handler struct {
-	Store           *runtime.Store
-	Registry        *registry.Registry
-	RetryRegistry   *registry.RetryRegistry
-	BreakerRegistry *breaker.Registry
-	OutlierRegistry *outlier.Registry
-	PluginRegistry  *plugin.Registry
-	Engine          *Engine
-	Metrics         *obs.Metrics
-	Cache           *cache.Cache
-	Inflight        *runtime.InflightTracker
+	Store            *runtime.Store
+	Registry         *registry.Registry
+	RetryRegistry    *registry.RetryRegistry
+	BreakerRegistry  *breaker.Registry
+	OutlierRegistry  *outlier.Registry
+	PluginRegistry   *plugin.Registry
+	Engine           *Engine
+	Metrics          *obs.Metrics
+	Cache            *cache.Cache
+	Inflight         *runtime.InflightTracker
+	SnapshotObserver SnapshotObserver
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +99,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bytesIn = r.ContentLength
 	}
 
+	var snap *runtime.Snapshot
 	defer func() {
+		if snap != nil {
+			h.observeSnapshot(SnapshotPhaseResponseWrite, snap)
+		}
 		if recovered := recover(); recovered != nil {
 			recorder.SetErrorCategory("panic")
 			if !recorder.WroteHeader() {
@@ -186,7 +191,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap := h.Store.Acquire()
+	snap = h.Store.Acquire()
 	if snap == nil || snap.Router == nil {
 		if snap != nil {
 			h.Store.Release(snap)
@@ -206,6 +211,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.observeSnapshot(SnapshotPhaseRouteMatch, snap)
 	obs.MarkPhase(r.Context(), "route_match")
 
 	route, ok := snap.Router.Match(r)
@@ -344,6 +350,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	obs.MarkPhase(r.Context(), "upstream_pick")
 	picker := func() (pool.PickResult, bool) {
+		h.observeSnapshot(SnapshotPhaseUpstreamPick, snap)
 		return h.Registry.Pick(poolKeyValue, func(addr string, now time.Time) bool {
 			if h.OutlierRegistry == nil {
 				return false
@@ -475,6 +482,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	applyResponseStreamTimeout(retryResult.Response, snap.Limits.ResponseStreamTimeout)
 	WriteUpstreamResponse(recorder, retryResult.Response, requestID)
+}
+
+func (h *Handler) observeSnapshot(phase string, snapshot *runtime.Snapshot) {
+	if h == nil || h.SnapshotObserver == nil || snapshot == nil {
+		return
+	}
+	h.SnapshotObserver.ObserveSnapshot(phase, snapshot)
 }
 
 var errBodyTooLarge = errors.New("body too large")

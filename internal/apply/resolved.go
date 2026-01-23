@@ -65,7 +65,7 @@ func (m *Manager) ApplyResolvedVersion(ctx context.Context, raw []byte, source s
 		defer trafficReg.Close()
 	}
 
-	snapshot, err := m.compileResolved(ctx, cfg, reg, breakerReg, outlierReg, trafficReg)
+	snapshot, warnings, err := m.compileResolved(ctx, cfg, reg, breakerReg, outlierReg, trafficReg)
 	if err != nil {
 		return nil, err
 	}
@@ -81,10 +81,11 @@ func (m *Manager) ApplyResolvedVersion(ctx context.Context, raw []byte, source s
 		}
 	}
 
-	return &Result{Snapshot: snapshot, Version: version, Config: cfg}, nil
+	logValidationWarnings(warnings)
+	return &Result{Snapshot: snapshot, Version: version, Config: cfg, Warnings: warnings}, nil
 }
 
-func (m *Manager) compileResolved(ctx context.Context, cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry, trafficReg *traffic.Registry) (*runtime.Snapshot, error) {
+func (m *Manager) compileResolved(ctx context.Context, cfg *config.Config, reg *registry.Registry, breakerReg *breaker.Registry, outlierReg *outlier.Registry, trafficReg *traffic.Registry) (*runtime.Snapshot, []string, error) {
 	timeout := m.compileTimeout
 	if timeout <= 0 {
 		timeout = DefaultCompileTimeout
@@ -94,17 +95,22 @@ func (m *Manager) compileResolved(ctx context.Context, cfg *config.Config, reg *
 
 	resultCh := make(chan compileResult, 1)
 	go func() {
+		warnings, err := config.Validate(cfg)
+		if err != nil {
+			resultCh <- compileResult{err: err}
+			return
+		}
 		snapshot, err := runtime.BuildSnapshot(cfg, reg, breakerReg, outlierReg, trafficReg)
-		resultCh <- compileResult{snapshot: snapshot, cfg: cfg, err: err}
+		resultCh <- compileResult{snapshot: snapshot, cfg: cfg, warnings: warnings, err: err}
 	}()
 
 	select {
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, ErrCompileTimeout
+			return nil, nil, ErrCompileTimeout
 		}
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	case result := <-resultCh:
-		return result.snapshot, result.err
+		return result.snapshot, result.warnings, result.err
 	}
 }

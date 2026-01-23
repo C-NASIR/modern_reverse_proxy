@@ -145,6 +145,24 @@ Production readiness references:
 - `docs/SLO_ALERTS.md`
 - `docs/PLAYBOOKS.md`
 
+Design invariants:
+
+- `docs/INVARIANTS.md`
+
+Failure semantics:
+
+- `docs/FAILURE_MODES.md`
+
+Is this production ready?
+
+- [ ] Admin listener protected with mTLS + token
+- [ ] Signed config bundles enabled (or explicit override)
+- [ ] Metrics endpoint protected if exposed
+- [ ] SLOs and alerts configured from `docs/SLO_ALERTS.md`
+- [ ] Playbooks reviewed and on-call rotation in place
+
+Scope: Coherent Proxy is a high-performance reverse proxy and traffic boundary. It is not a service mesh, general-purpose API gateway, or a place for business logic.
+
 Metrics exposure can be disabled or protected via the `metrics` config section (`enabled`, `path`, `require_token`, `token_env`).
 
 ## CLI Flags

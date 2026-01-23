@@ -93,8 +93,11 @@ func (h *handler) handleValidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, requestID, status, message)
 		return
 	}
-	_ = result
-	writeJSON(w, requestID, http.StatusOK, map[string]bool{"ok": true})
+	response := map[string]interface{}{"ok": true}
+	if result != nil && len(result.Warnings) > 0 {
+		response["warnings"] = result.Warnings
+	}
+	writeJSON(w, requestID, http.StatusOK, response)
 }
 
 func (h *handler) handleApply(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +142,11 @@ func (h *handler) handleApply(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	log.Printf("admin_apply request_id=%s version=%s result=success", requestID, result.Version)
-	writeJSON(w, requestID, http.StatusOK, map[string]interface{}{"applied": true, "version": result.Version})
+	response := map[string]interface{}{"applied": true, "version": result.Version}
+	if result != nil && len(result.Warnings) > 0 {
+		response["warnings"] = result.Warnings
+	}
+	writeJSON(w, requestID, http.StatusOK, response)
 }
 
 func (h *handler) handleBundle(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,12 @@ type Store struct {
 	maxRetired int
 }
 
+type RetiredSnapshotInfo struct {
+	ID        uint64
+	RefCount  int64
+	RetiredAt time.Time
+}
+
 func NewStore(initial *Snapshot) *Store {
 	store := &Store{maxRetired: defaultMaxRetiredSnapshots}
 	store.current.Store(initial)
@@ -82,6 +88,29 @@ func (s *Store) RetiredCount() int {
 	count := len(s.retired)
 	s.mu.Unlock()
 	return count
+}
+
+func (s *Store) RetiredSnapshots() []RetiredSnapshotInfo {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.retired) == 0 {
+		return nil
+	}
+	infos := make([]RetiredSnapshotInfo, 0, len(s.retired))
+	for _, snapshot := range s.retired {
+		if snapshot == nil {
+			continue
+		}
+		infos = append(infos, RetiredSnapshotInfo{
+			ID:        snapshot.ID,
+			RefCount:  snapshot.RefCount(),
+			RetiredAt: snapshot.RetiredAt(),
+		})
+	}
+	return infos
 }
 
 func (s *Store) Reap() {
