@@ -8,7 +8,7 @@ This gives you speed on the hot path and safety during change.
 
 Most reverse proxies either start simple and accrete features until unmaintainable, or try to do everything immediately and collapse under complexity.
 
-Coherent Proxy threads the needle: complete enough for real production needs, constrained enough to actually build and operate.
+This proxy threads the needle: complete enough for real production needs, constrained enough to actually build and operate.
 
 ### Core Design Principle
 
@@ -21,7 +21,7 @@ All runtime mutation lives in long-lived shared components keyed by stable ident
 
 ## What It Does
 
-Coherent Proxy sits between clients and services as a shared traffic boundary, doing five jobs simultaneously:
+This Proxy sits between clients and services as a shared traffic boundary, doing five jobs simultaneously:
 
 1. **Forward traffic** correctly and efficiently
 2. **Route traffic** to the right place
@@ -161,7 +161,7 @@ Is this production ready?
 - [ ] SLOs and alerts configured from `docs/SLO_ALERTS.md`
 - [ ] Playbooks reviewed and on-call rotation in place
 
-Scope: Coherent Proxy is a high-performance reverse proxy and traffic boundary. It is not a service mesh, general-purpose API gateway, or a place for business logic.
+Scope: This Proxy is a high-performance reverse proxy and traffic boundary. It is not a service mesh, general-purpose API gateway, or a place for business logic.
 
 Metrics exposure can be disabled or protected via the `metrics` config section (`enabled`, `path`, `require_token`, `token_env`).
 
@@ -607,14 +607,14 @@ PROXY_TLS_KEY=/etc/certs/proxy.key
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: coherent-proxy
+  name: modern-reverse-proxy
 spec:
   replicas: 3
   template:
     spec:
       containers:
         - name: proxy
-          image: coherent-proxy:latest
+          image: modern-reverse-proxy-proxy:latest
           ports:
             - containerPort: 8080
               name: http
