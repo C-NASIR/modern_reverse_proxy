@@ -735,4 +735,4 @@ Apache 2.0
 
 ---
 
-Built with ❤️ for production reliability.
+Built with ❤️ by C-NASIR.
