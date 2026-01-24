@@ -77,7 +77,7 @@ flowchart LR
 
 ### Dependency Graph
 
-```
+```mermaid
 flowchart LR
   cmd_proxy["cmd/proxy"] --> admin["internal/admin"]
   cmd_proxy --> apply["internal/apply"]
@@ -146,6 +146,7 @@ flowchart LR
 
   server --> limits
   server --> runtime
+
 ```
 
 ### Sequence Diagram
