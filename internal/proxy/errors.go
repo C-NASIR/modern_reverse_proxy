@@ -43,10 +43,6 @@ func WriteOverload(w http.ResponseWriter, requestID string) {
 	WriteProxyError(w, requestID, http.StatusServiceUnavailable, "overloaded", "overloaded")
 }
 
-func WithRequestID(ctx context.Context, requestID string) context.Context {
-	return context.WithValue(ctx, requestIDKey, requestID)
-}
-
 func RequestIDFromContext(ctx context.Context) (string, bool) {
 	value, ok := ctx.Value(requestIDKey).(string)
 	return value, ok

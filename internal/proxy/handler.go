@@ -48,9 +48,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := r.Header.Get(RequestIDHeader)
 	if requestID == "" {
 		requestID = NewRequestID()
-		if requestID == "" {
-			requestID = time.Now().UTC().Format("20060102150405.000000000")
-		}
 	}
 	recorder.Header().Set(RequestIDHeader, requestID)
 	if strings.HasPrefix(r.URL.Path, "/admin") {
@@ -59,7 +56,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := obs.StartTrace(r.Context(), r)
-	ctx = WithRequestID(ctx, requestID)
+	ctx = context.WithValue(ctx, requestIDKey, requestID)
 	r = r.WithContext(ctx)
 
 	logPath := r.URL.Path
