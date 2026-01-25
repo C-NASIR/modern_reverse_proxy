@@ -712,7 +712,7 @@ Each step extends the same boundaries instead of changing them.
 
 We welcome contributions! Please:
 
-1. Read `DESIGN.md` for architecture details
+1. Read `ARCH.md` for architecture details
 2. Check `CONTRIBUTING.md` for guidelines
 3. Open an issue before large changes
 4. Write tests for all new features
