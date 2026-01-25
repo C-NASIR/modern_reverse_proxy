@@ -1,6 +1,6 @@
 module modern_reverse_proxy
 
-go 1.25
+go 1.22
 
 require (
 	github.com/prometheus/client_golang v1.20.4

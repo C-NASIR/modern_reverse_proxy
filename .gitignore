@@ -20,6 +20,9 @@ go.work
 .gocache/
 .gomodcache/
 
+# Generated local TLS materials
+secrets/
+
 # IDE/editor
 .idea/
 .vscode/

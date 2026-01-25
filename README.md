@@ -111,6 +111,7 @@ go build -o ./bin/proxy ./cmd/proxy
 ### Run with Docker Compose
 
 ```bash
+chmod +x scripts/*.sh
 ./scripts/gen-certs.sh
 docker compose up -d --build
 curl http://localhost:8080/
