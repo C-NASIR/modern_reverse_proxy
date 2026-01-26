@@ -1,0 +1,371 @@
+{
+  "listen_addr": ":8080",
+  "tls": {
+    "enabled": true,
+    "addr": "127.0.0.1:8443",
+    "certs": [
+      {
+        "server_name": "localhost",
+        "cert_file": "secrets/admin-cert.pem",
+        "key_file": "secrets/admin-key.pem"
+      }
+    ],
+    "client_ca_file": "secrets/admin-ca.pem",
+    "min_version": "1.3",
+    "cipher_suites": [
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    ]
+  },
+  "limits": {
+    "max_header_bytes": 16384,
+    "max_header_count": 100,
+    "max_url_bytes": 4096,
+    "max_body_bytes": 1048576,
+    "read_header_timeout_ms": 2000,
+    "read_timeout_ms": 10000,
+    "write_timeout_ms": 10000,
+    "idle_timeout_ms": 60000,
+    "response_stream_timeout_ms": 30000
+  },
+  "shutdown": {
+    "drain_ms": 5000,
+    "graceful_timeout_ms": 15000,
+    "force_close_ms": 3000
+  },
+  "logging": {
+    "redact_query": true
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics",
+    "require_token": true,
+    "token_env": "METRICS_TOKEN"
+  },
+  "routes": [
+    {
+      "id": "full_public",
+      "host": "localhost",
+      "path_prefix": "/public",
+      "methods": ["GET", "HEAD"],
+      "pool": "primary",
+      "overlay": false,
+      "policy": {
+        "request_timeout_ms": 30000,
+        "upstream_dial_timeout_ms": 1000,
+        "upstream_response_header_timeout_ms": 5000,
+        "retry": {
+          "enabled": true,
+          "max_attempts": 3,
+          "per_try_timeout_ms": 500,
+          "total_retry_budget_ms": 2000,
+          "retry_on_status": [502, 503, 504],
+          "retry_on_errors": ["dial", "timeout"],
+          "backoff_ms": 50,
+          "backoff_jitter_ms": 20
+        },
+        "retry_budget": {
+          "enabled": true,
+          "percent_of_successes": 10,
+          "burst": 20
+        },
+        "client_retry_cap": {
+          "enabled": true,
+          "key": "ip",
+          "percent_of_successes": 5,
+          "burst": 10,
+          "lru_size": 10000
+        },
+        "require_mtls": false,
+        "mtls_client_ca": "",
+        "cache": {
+          "enabled": true,
+          "public": true,
+          "ttl_ms": 5000,
+          "max_object_bytes": 65536,
+          "vary_headers": ["Accept-Encoding", "Accept-Language"],
+          "coalesce_enabled": true,
+          "coalesce_timeout_ms": 200,
+          "only_if_content_length": true
+        },
+        "traffic": {
+          "enabled": false,
+          "stable_pool": "",
+          "canary_pool": "",
+          "stable_weight": 0,
+          "canary_weight": 0,
+          "cohort": {
+            "enabled": false,
+            "key": ""
+          },
+          "overload": {
+            "enabled": false,
+            "max_inflight": 0,
+            "max_queue": 0,
+            "queue_timeout_ms": 0
+          },
+          "autodrain": {
+            "enabled": false,
+            "window_ms": 0,
+            "min_requests": 0,
+            "error_rate_multiplier": 0,
+            "cooloff_ms": 0
+          }
+        },
+        "plugins": {
+          "enabled": false,
+          "filters": []
+        }
+      }
+    },
+    {
+      "id": "full_secure_plugins",
+      "host": "localhost",
+      "path_prefix": "/secure",
+      "methods": ["GET", "POST"],
+      "pool": "primary",
+      "overlay": false,
+      "policy": {
+        "request_timeout_ms": 20000,
+        "upstream_dial_timeout_ms": 1000,
+        "upstream_response_header_timeout_ms": 4000,
+        "retry": {
+          "enabled": true,
+          "max_attempts": 2,
+          "per_try_timeout_ms": 300,
+          "total_retry_budget_ms": 1000,
+          "retry_on_status": [502, 503, 504],
+          "retry_on_errors": ["dial", "timeout"],
+          "backoff_ms": 25,
+          "backoff_jitter_ms": 10
+        },
+        "retry_budget": {
+          "enabled": true,
+          "percent_of_successes": 10,
+          "burst": 10
+        },
+        "client_retry_cap": {
+          "enabled": true,
+          "key": "header:X-Client-ID",
+          "percent_of_successes": 5,
+          "burst": 5,
+          "lru_size": 5000
+        },
+        "require_mtls": true,
+        "mtls_client_ca": "default",
+        "cache": {
+          "enabled": false,
+          "public": false,
+          "ttl_ms": 0,
+          "max_object_bytes": 0,
+          "vary_headers": [],
+          "coalesce_enabled": true,
+          "coalesce_timeout_ms": 0,
+          "only_if_content_length": true
+        },
+        "traffic": {
+          "enabled": false,
+          "stable_pool": "",
+          "canary_pool": "",
+          "stable_weight": 0,
+          "canary_weight": 0,
+          "cohort": {
+            "enabled": false,
+            "key": ""
+          },
+          "overload": {
+            "enabled": false,
+            "max_inflight": 0,
+            "max_queue": 0,
+            "queue_timeout_ms": 0
+          },
+          "autodrain": {
+            "enabled": false,
+            "window_ms": 0,
+            "min_requests": 0,
+            "error_rate_multiplier": 0,
+            "cooloff_ms": 0
+          }
+        },
+        "plugins": {
+          "enabled": true,
+          "filters": [
+            {
+              "name": "demo-filter",
+              "addr": "127.0.0.1:7000",
+              "request_timeout_ms": 50,
+              "response_timeout_ms": 50,
+              "failure_mode": "fail_closed",
+              "breaker": {
+                "enabled": true,
+                "consecutive_failures": 3,
+                "open_ms": 2000,
+                "half_open_probes": 2
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "full_traffic",
+      "host": "localhost",
+      "path_prefix": "/canary",
+      "methods": [],
+      "pool": "primary",
+      "overlay": false,
+      "policy": {
+        "request_timeout_ms": 30000,
+        "upstream_dial_timeout_ms": 1000,
+        "upstream_response_header_timeout_ms": 5000,
+        "retry": {
+          "enabled": false,
+          "max_attempts": 0,
+          "per_try_timeout_ms": 0,
+          "total_retry_budget_ms": 0,
+          "retry_on_status": [],
+          "retry_on_errors": [],
+          "backoff_ms": 0,
+          "backoff_jitter_ms": 0
+        },
+        "retry_budget": {
+          "enabled": false,
+          "percent_of_successes": 0,
+          "burst": 0
+        },
+        "client_retry_cap": {
+          "enabled": false,
+          "key": "",
+          "percent_of_successes": 0,
+          "burst": 0,
+          "lru_size": 0
+        },
+        "require_mtls": false,
+        "mtls_client_ca": "",
+        "cache": {
+          "enabled": false,
+          "public": false,
+          "ttl_ms": 0,
+          "max_object_bytes": 0,
+          "vary_headers": [],
+          "coalesce_enabled": true,
+          "coalesce_timeout_ms": 0,
+          "only_if_content_length": true
+        },
+        "traffic": {
+          "enabled": true,
+          "stable_pool": "primary",
+          "canary_pool": "canary",
+          "stable_weight": 90,
+          "canary_weight": 10,
+          "cohort": {
+            "enabled": true,
+            "key": "header:X-User"
+          },
+          "overload": {
+            "enabled": true,
+            "max_inflight": 50,
+            "max_queue": 100,
+            "queue_timeout_ms": 50
+          },
+          "autodrain": {
+            "enabled": true,
+            "window_ms": 10000,
+            "min_requests": 50,
+            "error_rate_multiplier": 3,
+            "cooloff_ms": 30000
+          }
+        },
+        "plugins": {
+          "enabled": false,
+          "filters": []
+        }
+      }
+    }
+  ],
+  "pools": {
+    "primary": {
+      "endpoints": ["upstream_a:8081", "upstream_dead:9999"],
+      "overlay": false,
+      "health": {
+        "path": "/healthz",
+        "interval_ms": 1500,
+        "timeout_ms": 1000,
+        "unhealthy_after_failures": 2,
+        "healthy_after_successes": 1,
+        "base_eject_ms": 10000,
+        "max_eject_ms": 300000
+      },
+      "breaker": {
+        "enabled": true,
+        "failure_rate_threshold_percent": 50,
+        "minimum_requests": 20,
+        "evaluation_window_ms": 10000,
+        "open_ms": 5000,
+        "half_open_max_probes": 5
+      },
+      "outlier": {
+        "enabled": true,
+        "consecutive_failures": 5,
+        "error_rate_threshold_percent": 50,
+        "error_rate_window_ms": 30000,
+        "min_requests": 20,
+        "base_eject_ms": 30000,
+        "max_eject_ms": 600000,
+        "max_eject_percent": 50,
+        "latency_enabled": true,
+        "latency_window_size": 128,
+        "latency_eval_interval_ms": 10000,
+        "latency_min_samples": 50,
+        "latency_multiplier": 3,
+        "latency_consecutive_intervals": 3
+      },
+      "transport": {
+        "max_idle_per_host": 256,
+        "max_conns_per_host": 0,
+        "idle_conn_timeout_ms": 90000
+      }
+    },
+    "canary": {
+      "endpoints": ["upstream_b:8082"],
+      "overlay": false,
+      "health": {
+        "path": "/healthz",
+        "interval_ms": 2000,
+        "timeout_ms": 1000,
+        "unhealthy_after_failures": 3,
+        "healthy_after_successes": 2,
+        "base_eject_ms": 10000,
+        "max_eject_ms": 300000
+      },
+      "breaker": {
+        "enabled": true,
+        "failure_rate_threshold_percent": 50,
+        "minimum_requests": 20,
+        "evaluation_window_ms": 10000,
+        "open_ms": 2000,
+        "half_open_max_probes": 5
+      },
+      "outlier": {
+        "enabled": true,
+        "consecutive_failures": 5,
+        "error_rate_threshold_percent": 50,
+        "error_rate_window_ms": 30000,
+        "min_requests": 20,
+        "base_eject_ms": 30000,
+        "max_eject_ms": 600000,
+        "max_eject_percent": 50,
+        "latency_enabled": true,
+        "latency_window_size": 128,
+        "latency_eval_interval_ms": 10000,
+        "latency_min_samples": 50,
+        "latency_multiplier": 3,
+        "latency_consecutive_intervals": 3
+      },
+      "transport": {
+        "max_idle_per_host": 256,
+        "max_conns_per_host": 0,
+        "idle_conn_timeout_ms": 90000
+      }
+    }
+  }
+}

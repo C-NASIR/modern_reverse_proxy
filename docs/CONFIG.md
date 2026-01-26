@@ -90,5 +90,6 @@ Reference examples in `configs/examples`:
 - `canary_overload.json` for traffic shaping.
 - `plugins.json` for plugin filters.
 - `admin_signed.json` for bundle workflows.
+- `full.json` for a full configuration showing all available options.
 
 The plugin example assumes a filter service is reachable at the configured address.
